@@ -1,4 +1,5 @@
 import io
+from copy import copy
 from datetime import date
 from openpyxl import load_workbook
 from openpyxl.workbook.workbook import Workbook
@@ -29,16 +30,98 @@ class WorkbookManager:
 
     def _copy_template(self, sheet_name: str) -> Worksheet:
         """
-        Load a fresh copy of the template workbook from bytes, copy the
-        relevant sheet into self._wb, and return it.
-        Uses a temporary workbook to avoid the cross-workbook copy restriction
-        in openpyxl — copy_worksheet only works within the same workbook.
+        Load a fresh copy of the template workbook from bytes and manually
+        replicate the relevant sheet into self._wb.
+        openpyxl's copy_worksheet only works within a single workbook, so a
+        temporary workbook can't be copy_worksheet'd directly into self._wb —
+        instead we create a blank sheet here and transplant cell values,
+        styles, merges, dimensions, and images one by one.
         """
         tmp_wb = load_workbook(io.BytesIO(self._template_bytes))
         tmp_ws = tmp_wb[self._template_sheet]
-        ws     = self._wb.copy_worksheet(tmp_ws)
-        ws.title = sheet_name
+        ws     = self._wb.create_sheet(title=sheet_name)
+
+        self._copy_dimensions(tmp_ws, ws)
+        self._copy_cells(tmp_ws, ws)
+        self._copy_merged_cells(tmp_ws, ws)
+        self._copy_images(tmp_ws, ws)
+
+        ws.sheet_format = copy(tmp_ws.sheet_format)
+        ws.freeze_panes  = tmp_ws.freeze_panes
         return ws
+
+    @staticmethod
+    def _copy_dimensions(src: Worksheet, dst: Worksheet) -> None:
+        for col_letter, dim in src.column_dimensions.items():
+            dst.column_dimensions[col_letter].width  = dim.width
+            dst.column_dimensions[col_letter].hidden = dim.hidden
+
+        for row_idx, dim in src.row_dimensions.items():
+            dst_dim                = dst.row_dimensions[row_idx]
+            dst_dim.height          = dim.height
+            dst_dim.hidden          = dim.hidden
+            dst_dim.outlineLevel    = dim.outlineLevel
+            dst_dim.collapsed       = dim.collapsed
+
+    @staticmethod
+    def _copy_cells(src: Worksheet, dst: Worksheet) -> None:
+        for row in src.iter_rows():
+            for cell in row:
+                new_cell = dst.cell(row=cell.row, column=cell.column, value=cell.value)
+                if cell.has_style:
+                    new_cell.font          = copy(cell.font)
+                    new_cell.border        = copy(cell.border)
+                    new_cell.fill          = copy(cell.fill)
+                    new_cell.alignment     = copy(cell.alignment)
+                    new_cell.protection    = copy(cell.protection)
+                    new_cell.number_format = cell.number_format
+
+    @staticmethod
+    def _copy_merged_cells(src: Worksheet, dst: Worksheet) -> None:
+        for merged_range in src.merged_cells.ranges:
+            dst.merge_cells(str(merged_range))
+
+    @staticmethod
+    def _copy_images(src: Worksheet, dst: Worksheet) -> None:
+        # e.g. the company logo on the foaming/carpenter/sales templates
+        for img in src._images:
+            dst.add_image(copy(img), img.anchor)
+
+    @staticmethod
+    def _copy_row_style(ws: Worksheet, src_row: int, dst_row: int, max_col: int = None) -> None:
+        """
+        Clone cell styles and row height from src_row onto dst_row.
+        Used by Carpenter/Sales workbooks when appending a new order row
+        beyond the template's first data row — ws.cell() creates plain,
+        unstyled cells by default, so without this the appended rows would
+        be missing the borders/fonts/height present on the template row.
+
+        max_col defaults to the worksheet's own column count rather than a
+        caller-supplied constant — Carpenter (9 cols) and Sales (12 cols)
+        templates don't have the same width, and a hardcoded value silently
+        drifts out of sync (and under-styles trailing columns) if either
+        template's column count ever changes.
+        """
+        if dst_row == src_row:
+            return
+
+        if max_col is None:
+            max_col = ws.max_column
+
+        for col in range(1, max_col + 1):
+            src_cell = ws.cell(row=src_row, column=col)
+            dst_cell = ws.cell(row=dst_row, column=col)
+            if src_cell.has_style:
+                dst_cell.font          = copy(src_cell.font)
+                dst_cell.border        = copy(src_cell.border)
+                dst_cell.fill          = copy(src_cell.fill)
+                dst_cell.alignment     = copy(src_cell.alignment)
+                dst_cell.protection    = copy(src_cell.protection)
+                dst_cell.number_format = src_cell.number_format
+
+        src_dim = ws.row_dimensions[src_row]
+        dst_dim = ws.row_dimensions[dst_row]
+        dst_dim.height = src_dim.height
 
     def has_sheet(self, sheet_name: str) -> bool:
         return sheet_name in self._wb.sheetnames
@@ -94,7 +177,7 @@ class FoamingWorkbook(WorkbookManager):
         ws["E4"]  = fmt(order_date)
         ws["E5"]  = fmt(modified_delivery)
         ws["B8"]  = customer_name
-        ws["B10"] = order_id
+        ws["C10"] = order_id
         ws["B13"] = product_name
         ws["E15"] = qty
 
@@ -123,6 +206,7 @@ class CarpenterWorkbook(WorkbookManager):
 
         ws       = self._wb[sheet_name]
         next_row = self._next_empty_row(ws)
+        self._copy_row_style(ws, self._DATA_START_ROW, next_row)
 
         ws.cell(row=next_row, column=1).value = qty
         ws.cell(row=next_row, column=2).value = wo_number
@@ -163,6 +247,7 @@ class SalesWorkbook(WorkbookManager):
 
         ws       = self._wb[sheet_name]
         next_row = self._next_empty_row(ws)
+        self._copy_row_style(ws, self._DATA_START_ROW, next_row)
 
         ws.cell(row=next_row, column=1).value = sr_no
         ws.cell(row=next_row, column=2).value = modified_delivery.strftime("%d/%m/%Y")

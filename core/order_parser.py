@@ -43,16 +43,18 @@ class OrderParser:
             order_confirmed = self._parse_date(row[_COL_ORDER_DATE])
             modified        = ship_before - _DELIVERY_OFFSET
 
-            # Determine month key for foaming workbook (based on modified delivery)
-            month_key = modified.strftime("%b/%y")   # e.g. "Jul/26"
+            # Internal counter key — includes year so e.g. Jul/26 and Jul/27
+            # don't share a counter. Not used for display.
+            counter_key = modified.strftime("%b/%y")    # e.g. "Jul/26"
+            month_abbr  = modified.strftime("%b")        # e.g. "Jul" — used in wo_number
 
             # Assign work order number — resets per month, starts at start_number
-            if month_key not in month_counters:
-                month_counters[month_key] = start_number
+            if counter_key not in month_counters:
+                month_counters[counter_key] = start_number
             else:
-                month_counters[month_key] += 1
+                month_counters[counter_key] += 1
 
-            wo_number = f"G1/{month_key}/{month_counters[month_key]}"
+            wo_number = f"G1/{month_abbr}/{month_counters[counter_key]}"
 
             source = PendingOrder(
                 order_id        = str(row[_COL_ORDER_ID]).strip(),
@@ -92,8 +94,14 @@ class OrderParser:
     def _parse_date(self, value: str) -> date:
         """
         Parse a date string into a Python date object.
+        Pepperfry exports dates as dd-mm-yy (e.g. "09-07-26" = 9 July 2026),
+        so dayfirst=True is required — without it, pandas defaults to
+        month-first parsing and only falls back to day-first when the first
+        number can't possibly be a month (e.g. "27-06-26"), silently
+        misparsing the rest (e.g. "09-07-26" becomes 7 September instead of
+        9 July).
         """
-        return pd.to_datetime(value).date()
+        return pd.to_datetime(value, dayfirst=True).date()
 
     @staticmethod
     def format_date(d: date) -> str:
