@@ -1,0 +1,8 @@
+# Ignore all __pycache__ directories and their contents
+./*/__pycache__/*
+
+# Ignore the workbooks used for testing
+./existing_workbooks/*
+
+# Ignore the pending order file used for testing
+./*.csv
