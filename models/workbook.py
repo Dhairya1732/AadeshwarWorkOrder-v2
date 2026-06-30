@@ -233,6 +233,7 @@ class SalesWorkbook(WorkbookManager):
     """
 
     _DATA_START_ROW = 4
+    _DATE_PLACEHOLDER = "[Order Confirmed Date]"
 
     def __init__(self, existing_path: str, template_bytes: bytes, month_key: str):
         super().__init__(existing_path, template_bytes, SHEET_SALES, month_key)
@@ -243,7 +244,8 @@ class SalesWorkbook(WorkbookManager):
         sheet_name = self.date_to_sheet_name(order_date)
 
         if not self.has_sheet(sheet_name):
-            self._copy_template(sheet_name)
+            ws = self._copy_template(sheet_name)
+            self._fill_header(ws, order_date)
 
         ws       = self._wb[sheet_name]
         next_row = self._next_empty_row(ws)
@@ -258,6 +260,20 @@ class SalesWorkbook(WorkbookManager):
         # columns 7 (Fabric), 8 (Remark) — manual
         ws.cell(row=next_row, column=9).value = order_id
         # columns 10 (Dispatch Date), 11 (Foaming Team), 12 (Carpenter Team) — manual
+
+    def _fill_header(self, ws: Worksheet, order_date: date) -> None:
+        """
+        The template's date cell (A2) holds a literal placeholder —
+        " Date : [Order Confirmed Date]" — swap it for the sheet's actual
+        date the first time the sheet is created. All orders on this sheet
+        share the same order_date (that's what date_to_sheet_name groups
+        them by), so this only needs to run once per sheet, not per order.
+        """
+        cell = ws["A2"]
+        if cell.value and self._DATE_PLACEHOLDER in cell.value:
+            cell.value = cell.value.replace(
+                self._DATE_PLACEHOLDER, OrderParser.format_date(order_date)
+            )
 
     def _next_empty_row(self, ws: Worksheet) -> int:
         row = self._DATA_START_ROW

@@ -62,7 +62,7 @@ class SheetBuilder:
     # ── Foaming ─────────────────────────────────────────────────────────────────
 
     def add_to_foaming(self, wo: WorkOrder) -> None:
-        month_key = wo.foaming_month   # e.g. "Jul 26" — based on modified_delivery
+        month_key = wo.workbook_month   # e.g. "Jul 26" — based on modified_delivery, same as wo_number
 
         book = self._foaming_books.get(month_key)
         if book is None:
@@ -82,7 +82,7 @@ class SheetBuilder:
     # ── Carpenter ───────────────────────────────────────────────────────────────
 
     def add_to_carpenter(self, wo: WorkOrder) -> None:
-        month_key = wo.sheet_month   # e.g. "Jul 26" — based on order_date
+        month_key = wo.workbook_month   # e.g. "Jul 26" — based on modified_delivery, same as wo_number
 
         book = self._carpenter_books.get(month_key)
         if book is None:
@@ -95,13 +95,13 @@ class SheetBuilder:
             sku_id       = wo.stripped_name,   # carpenter uses stripped name, not SKU
             order_id     = wo.order_id,
             qty          = wo.qty,
-            order_date   = wo.order_date,
+            order_date   = wo.order_date,   # per-day SHEET name within the workbook — unaffected by month_key above
         )
 
     # ── Sales ───────────────────────────────────────────────────────────────────
 
     def add_to_sales(self, wo: WorkOrder) -> None:
-        month_key = wo.sheet_month   # e.g. "Jul 26" — based on order_date
+        month_key = wo.workbook_month   # e.g. "Jul 26" — based on modified_delivery, same as wo_number
 
         book = self._sales_books.get(month_key)
         if book is None:
@@ -116,6 +116,6 @@ class SheetBuilder:
             product_name        = wo.stripped_name,   # sales uses stripped name too
             order_id            = wo.order_id,
             qty                 = wo.qty,
-            order_date          = wo.order_date,
+            order_date          = wo.order_date,   # per-day SHEET name within the workbook — unaffected by month_key above
         )
         self._sales_sr_no += 1

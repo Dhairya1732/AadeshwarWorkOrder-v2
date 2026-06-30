@@ -58,14 +58,25 @@ class WorkOrder:
         return self.source.qty
 
     @property
-    def foaming_month(self) -> str:
-        """Month key for foaming workbook — based on modified delivery date."""
-        return self.modified_delivery.strftime("%b %y")   # e.g. "Jul 26"
+    def workbook_month(self) -> str:
+        """
+        Month key used for the Foaming, Carpenter, and Sales workbook
+        FILENAMES — based on modified_delivery, the same date OrderParser
+        uses to assign the month embedded in work_order_no (e.g.
+        "G1/Jul/92" → modified_delivery falls in July, so this is "Jul 26").
 
-    @property
-    def sheet_month(self) -> str:
-        """Month key for carpenter and sales workbooks — based on order date."""
-        return self.order_date.strftime("%b %y")           # e.g. "Jul 26"
+        Deliberately NOT order_date: the 2-day ship-before offset can push
+        modified_delivery into the next month from order_date (e.g. an
+        order confirmed 27/06 with modified_delivery in July), and the
+        workbook filename must match the WO number's month, not the literal
+        order date, or G1/Jul/92 ends up filed under "CA - Jun 26" instead
+        of "CA - Jul 26".
+
+        Note: this is unrelated to the per-day SHEET name inside the
+        carpenter/sales workbooks, which is based on order_date directly
+        (see WorkbookManager.date_to_sheet_name) and is unaffected by this.
+        """
+        return self.modified_delivery.strftime("%b %y")   # e.g. "Jul 26"
 
     # ── Static methods ──────────────────────────────────────────────────────────
 
