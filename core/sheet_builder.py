@@ -27,11 +27,6 @@ class SheetBuilder:
         self._carpenter_books: dict[str, CarpenterWorkbook] = {}
         self._sales_books:     dict[str, SalesWorkbook]     = {}
 
-        # Running serial number for sales sheet — resets per date sheet via
-        # WorkbookManager's row counting, but we still need an incrementing
-        # value across the whole batch for the "Sr. No." column
-        self._sales_sr_no = 1
-
     def build(self, work_orders: list[WorkOrder]) -> None:
         """
         Process every WorkOrder, writing it into the appropriate
@@ -109,7 +104,6 @@ class SheetBuilder:
             self._sales_books[month_key] = book
 
         book.add_order(
-            sr_no               = self._sales_sr_no,
             wo_number           = wo.work_order_no,
             modified_delivery   = wo.modified_delivery,
             customer_name       = wo.customer_name,
@@ -118,4 +112,3 @@ class SheetBuilder:
             qty                 = wo.qty,
             order_date          = wo.order_date,   # per-day SHEET name within the workbook — unaffected by month_key above
         )
-        self._sales_sr_no += 1

@@ -238,7 +238,7 @@ class SalesWorkbook(WorkbookManager):
     def __init__(self, existing_path: str, template_bytes: bytes, month_key: str):
         super().__init__(existing_path, template_bytes, SHEET_SALES, month_key)
 
-    def add_order(self, sr_no: int, wo_number: str, modified_delivery: date,
+    def add_order(self, wo_number: str, modified_delivery: date,
                   customer_name: str, product_name: str, order_id: str,
                   qty: int, order_date: date) -> None:
         sheet_name = self.date_to_sheet_name(order_date)
@@ -251,7 +251,7 @@ class SalesWorkbook(WorkbookManager):
         next_row = self._next_empty_row(ws)
         self._copy_row_style(ws, self._DATA_START_ROW, next_row)
 
-        ws.cell(row=next_row, column=1).value = sr_no
+        ws.cell(row=next_row, column=1).value = next_row - self._DATA_START_ROW + 1   # serial number
         ws.cell(row=next_row, column=2).value = modified_delivery.strftime("%d/%m/%Y")
         ws.cell(row=next_row, column=3).value = wo_number
         ws.cell(row=next_row, column=4).value = qty
