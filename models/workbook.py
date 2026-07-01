@@ -5,7 +5,6 @@ from copy import copy
 from datetime import date
 from PIL import Image as PILImage
 from openpyxl import load_workbook
-from openpyxl.workbook.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, AnchorMarker
@@ -15,7 +14,7 @@ from openpyxl.utils import get_column_letter
 from core.order_parser import OrderParser
 from core.template_loader import SHEET_FOAMING, SHEET_CARPENTER, SHEET_SALES
 
-logger = _logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 class WorkbookManager:
     """
@@ -35,6 +34,11 @@ class WorkbookManager:
     # template explicitly sized — anything untouched falls back to these.
     _DEFAULT_COL_WIDTH_CHARS = 8.43
     _DEFAULT_ROW_HEIGHT_PT   = 15.0
+
+    # A4 = paper size code 9 in the OOXML spec (openpyxl doesn't expose a
+    # named constant for it). Orientation is set per subclass below.
+    _PAPER_SIZE_A4     = 9
+    _PAGE_ORIENTATION  = "landscape"   # overridden by Foaming (portrait)
 
     def __init__(self, existing_path: str, template_bytes: bytes,
                  template_sheet: str, month_key: str):
@@ -64,6 +68,7 @@ class WorkbookManager:
 
         ws.sheet_format = copy(tmp_ws.sheet_format)
         ws.freeze_panes  = tmp_ws.freeze_panes
+        self._apply_print_setup(ws)
         return ws
 
     @staticmethod
@@ -255,6 +260,20 @@ class WorkbookManager:
 
         ws.add_image(xl_img)
 
+    def _apply_print_setup(self, ws: Worksheet) -> None:
+        """
+        Every sheet this app generates is meant to be printed and handed
+        to the shop floor, so force A4 + fit-to-one-page instead of
+        Excel's default "actual size" behaviour, which can silently
+        spill a sheet across several printed pages depending on the
+        printer's default paper size/scale.
+        """
+        ws.page_setup.paperSize   = self._PAPER_SIZE_A4
+        ws.page_setup.orientation = self._PAGE_ORIENTATION
+        ws.page_setup.fitToWidth  = 1
+        ws.page_setup.fitToHeight = 1
+        ws.sheet_properties.pageSetUpPr.fitToPage = True
+
 
 class FoamingWorkbook(WorkbookManager):
     """
@@ -265,6 +284,8 @@ class FoamingWorkbook(WorkbookManager):
     # Merged image cell on the template — sofa photo goes here, scaled to fit.
     _IMAGE_MIN_COL, _IMAGE_MAX_COL = 2, 3     # B:C
     _IMAGE_MIN_ROW, _IMAGE_MAX_ROW = 26, 35   # rows 26–35
+
+    _PAGE_ORIENTATION = "portrait"
 
     def __init__(self, existing_path: str, template_bytes: bytes, month_key: str):
         super().__init__(existing_path, template_bytes, SHEET_FOAMING, month_key)
