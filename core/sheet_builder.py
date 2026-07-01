@@ -86,12 +86,12 @@ class SheetBuilder:
             self._carpenter_books[month_key] = book
 
         book.add_order(
-            wo_number    = wo.work_order_no,
-            ship_before  = wo.source.ship_before,
-            sku_id       = wo.stripped_name,   # carpenter uses stripped name, not SKU
-            order_id     = wo.order_id,
-            qty          = wo.qty,
-            order_date   = wo.order_date,   # per-day SHEET name within the workbook — unaffected by month_key above
+            wo_number          = wo.work_order_no,
+            modified_delivery  = wo.modified_delivery,
+            sku_id             = wo.stripped_name,   # carpenter uses stripped name, not SKU
+            order_id           = wo.order_id,
+            qty                = wo.qty,
+            order_date         = wo.order_date,   # per-day SHEET name within the workbook — unaffected by month_key above
         )
 
     # ── Sales ───────────────────────────────────────────────────────────────────

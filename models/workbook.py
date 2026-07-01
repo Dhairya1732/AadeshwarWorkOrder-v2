@@ -337,7 +337,7 @@ class CarpenterWorkbook(WorkbookManager):
     def __init__(self, existing_path: str, template_bytes: bytes, month_key: str):
         super().__init__(existing_path, template_bytes, SHEET_CARPENTER, month_key)
 
-    def add_order(self, wo_number: str, ship_before: date, sku_id: str,
+    def add_order(self, wo_number: str, modified_delivery: date, sku_id: str,
                   order_id: str, qty: int, order_date: date) -> None:
         sheet_name = self.date_to_sheet_name(order_date)
 
@@ -350,7 +350,7 @@ class CarpenterWorkbook(WorkbookManager):
 
         ws.cell(row=next_row, column=1).value = qty
         ws.cell(row=next_row, column=2).value = wo_number
-        ws.cell(row=next_row, column=3).value = ship_before.strftime("%d/%m/%Y")
+        ws.cell(row=next_row, column=3).value = modified_delivery.strftime("%d/%m/%Y")
         ws.cell(row=next_row, column=4).value = sku_id
         # columns 5 (Fabric), 6 (Remark), 7 (Inches), 8 (Total Inches) — manual
         ws.cell(row=next_row, column=9).value = order_id
