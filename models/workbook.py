@@ -1,12 +1,21 @@
 import io
+import requests
+import logging
 from copy import copy
 from datetime import date
+from PIL import Image as PILImage
 from openpyxl import load_workbook
 from openpyxl.workbook.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
+from openpyxl.drawing.image import Image as XLImage
+from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, AnchorMarker
+from openpyxl.drawing.xdr import XDRPositiveSize2D
+from openpyxl.utils.units import pixels_to_EMU
+from openpyxl.utils import get_column_letter
 from core.order_parser import OrderParser
 from core.template_loader import SHEET_FOAMING, SHEET_CARPENTER, SHEET_SALES
 
+logger = _logger = logging.getLogger(__name__)
 
 class WorkbookManager:
     """
@@ -19,6 +28,13 @@ class WorkbookManager:
     existing_path   — path to the user-uploaded active workbook
     month_key       — e.g. "Jul/26", used for the output filename
     """
+
+    # Excel's default column width/row height when no explicit dimension is set,
+    # in the same units openpyxl stores them (chars / points). Needed because
+    # column_dimensions / row_dimensions dicts are only populated for cells the
+    # template explicitly sized — anything untouched falls back to these.
+    _DEFAULT_COL_WIDTH_CHARS = 8.43
+    _DEFAULT_ROW_HEIGHT_PT   = 15.0
 
     def __init__(self, existing_path: str, template_bytes: bytes,
                  template_sheet: str, month_key: str):
@@ -147,6 +163,98 @@ class WorkbookManager:
         """
         return f"{d.day:02d}.{d.month:02d}.{d.year}"
 
+    @staticmethod
+    def _col_width_to_px(width_chars: float) -> int:
+        # Standard Excel char-width → pixel conversion for the default
+        # (Calibri 11) font: pixels = round(chars * 7 + 5).
+        return int(round(width_chars * 7 + 5))
+
+    @staticmethod
+    def _row_height_to_px(height_pt: float) -> int:
+        # Points → pixels at 96 DPI (Excel's screen resolution assumption).
+        return int(round(height_pt * 96 / 72))
+
+    def _range_pixel_size(self, ws: Worksheet, min_col: int, max_col: int,
+                       min_row: int, max_row: int) -> tuple[int, int]:
+        """
+        Total pixel width/height of a (possibly merged) cell range.
+
+        Falls back to the sheet's own sheetFormatPr defaults
+        (ws.sheet_format.defaultColWidth / defaultRowHeight) for any
+        column/row that has no explicit dimension entry — these reflect
+        the template's actual font/size and can differ from Excel's
+        generic Calibri-11 defaults (e.g. 14.4pt row height instead of
+        15.0pt), which previously caused embedded images to be scaled
+        against a box slightly larger than the true cell range and spill
+        past the border. The class constants below are only a last-resort
+        fallback if the sheet doesn't specify its own defaults.
+        """
+        default_col_chars = ws.sheet_format.defaultColWidth or self._DEFAULT_COL_WIDTH_CHARS
+        default_row_pts    = ws.sheet_format.defaultRowHeight or self._DEFAULT_ROW_HEIGHT_PT
+
+        width_px = 0
+        for col in range(min_col, max_col + 1):
+            dim = ws.column_dimensions.get(get_column_letter(col))
+            chars = dim.width if dim and dim.width else default_col_chars
+            width_px += self._col_width_to_px(chars)
+
+        height_px = 0
+        for row in range(min_row, max_row + 1):
+            dim = ws.row_dimensions.get(row)
+            pts = dim.height if dim and dim.height else default_row_pts
+            height_px += self._row_height_to_px(pts)
+
+        return width_px, height_px
+
+    def _embed_scaled_image(self, ws: Worksheet, image_url: str,
+                             min_col: int, max_col: int,
+                             min_row: int, max_row: int,
+                             timeout: int = 10) -> None:
+        """
+        Download image_url and embed it (not linked — the actual bytes are
+        stored in the workbook) into the given cell range, scaled to fit
+        while preserving aspect ratio, centered, with leftover space left
+        blank. Silently skips (with a logged warning) on any failure —
+        a missing/broken product photo shouldn't block the whole order
+        from being written to the workbook.
+        """
+        if not image_url:
+            logger.warning("No image URL provided — skipping image embed.")
+            return
+
+        try:
+            resp = requests.get(image_url, timeout=timeout)
+            resp.raise_for_status()
+            raw = resp.content
+            src_w, src_h = PILImage.open(io.BytesIO(raw)).size
+        except Exception as exc:
+            logger.warning(f"Could not fetch/read image from {image_url}: {exc}")
+            return
+
+        target_w, target_h = self._range_pixel_size(ws, min_col, max_col, min_row, max_row)
+
+        scale   = min(target_w / src_w, target_h / src_h)
+        disp_w  = src_w * scale
+        disp_h  = src_h * scale
+
+        xl_img = XLImage(io.BytesIO(raw))
+        xl_img.width  = disp_w
+        xl_img.height = disp_h
+
+        # Center within the range: offset in EMU from the top-left cell of
+        # the range (col/row are 0-indexed in openpyxl's anchor API).
+        off_x_px = (target_w - disp_w) / 2
+        off_y_px = (target_h - disp_h) / 2
+
+        marker = AnchorMarker(
+            col=min_col - 1, colOff=pixels_to_EMU(max(off_x_px, 0)),
+            row=min_row - 1, rowOff=pixels_to_EMU(max(off_y_px, 0)),
+        )
+        size = XDRPositiveSize2D(pixels_to_EMU(disp_w), pixels_to_EMU(disp_h))
+        xl_img.anchor = OneCellAnchor(_from=marker, ext=size)
+
+        ws.add_image(xl_img)
+
 
 class FoamingWorkbook(WorkbookManager):
     """
@@ -154,11 +262,15 @@ class FoamingWorkbook(WorkbookManager):
     e.g. G1/Jul/47 → sheet name "47"
     """
 
+    # Merged image cell on the template — sofa photo goes here, scaled to fit.
+    _IMAGE_MIN_COL, _IMAGE_MAX_COL = 2, 3     # B:C
+    _IMAGE_MIN_ROW, _IMAGE_MAX_ROW = 26, 35   # rows 26–35
+
     def __init__(self, existing_path: str, template_bytes: bytes, month_key: str):
         super().__init__(existing_path, template_bytes, SHEET_FOAMING, month_key)
 
     def add_order(self, wo_number: str, order_date: date, modified_delivery: date,
-                  customer_name: str, order_id: str, product_name: str, qty: int) -> None:
+                  customer_name: str, order_id: str, product_name: str, qty: int, image_url: str = "") -> None:
         sheet_name = wo_number.split("/")[-1]   # "G1/Jul/47" → "47"
 
         if self.has_sheet(sheet_name):
@@ -167,6 +279,13 @@ class FoamingWorkbook(WorkbookManager):
         ws = self._copy_template(sheet_name)
         self._fill(ws, wo_number, order_date, modified_delivery,
                    customer_name, order_id, product_name, qty)
+        
+        if image_url:
+            self._embed_scaled_image(
+                ws, image_url,
+                self._IMAGE_MIN_COL, self._IMAGE_MAX_COL,
+                self._IMAGE_MIN_ROW, self._IMAGE_MAX_ROW,
+            )
 
     def _fill(self, ws: Worksheet, wo_number: str, order_date: date,
               modified_delivery: date, customer_name: str,

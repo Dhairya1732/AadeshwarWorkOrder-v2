@@ -72,6 +72,7 @@ class SheetBuilder:
             order_id            = wo.order_id,
             product_name        = wo.product_name,    # full name, not stripped
             qty                 = wo.qty,
+            image_url           = wo.source.image_url,
         )
 
     # ── Carpenter ───────────────────────────────────────────────────────────────

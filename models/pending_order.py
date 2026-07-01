@@ -15,3 +15,4 @@ class PendingOrder:
     qty:             int    # QTY
     ship_before:     date   # To be shippped Before
     order_confirmed: date   # Order Confirmed Date
+    image_url:       str    # Image URL — product photo, downloaded and embedded on the foaming sheet

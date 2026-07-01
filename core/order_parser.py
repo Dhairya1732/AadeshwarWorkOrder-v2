@@ -13,6 +13,7 @@ _COL_YOUR_SKU_ID   = "Your SKU ID"
 _COL_CUSTOMER_NAME = "Customer Name"
 _COL_SHIP_BEFORE   = "To be shippped Before"   # sic — Pepperfry typo
 _COL_ORDER_DATE    = "Order Confirmed Date"
+_COL_IMAGE_URL     = "Image url"
 
 _DELIVERY_OFFSET   = timedelta(days=2)
 
@@ -64,6 +65,7 @@ class OrderParser:
                 qty             = int(row[_COL_QTY]),
                 ship_before     = ship_before,
                 order_confirmed = order_confirmed,
+                image_url       = str(row[_COL_IMAGE_URL]).strip()
             )
 
             work_orders.append(WorkOrder(
@@ -82,7 +84,7 @@ class OrderParser:
         required = {
             _COL_ORDER_ID, _COL_QTY, _COL_PRODUCT_NAME,
             _COL_YOUR_SKU_ID, _COL_CUSTOMER_NAME,
-            _COL_SHIP_BEFORE, _COL_ORDER_DATE,
+            _COL_SHIP_BEFORE, _COL_ORDER_DATE, _COL_IMAGE_URL,
         }
         missing = required - set(df.columns)
         if missing:
