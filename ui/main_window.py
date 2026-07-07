@@ -124,6 +124,11 @@ class FileUploadButton(QWidget):
         self._sub.setText(filename)
         self._apply_style(loaded=True)
 
+    def reset(self):
+        self._path = None
+        self._sub.setText("Click to upload")
+        self._apply_style(loaded=False)
+
     @property
     def path(self) -> str | None:
         return self._path
@@ -218,6 +223,17 @@ class CsvUploadButton(QWidget):
         self._hint.setText(f"{row_count} orders · click to replace")
         self._hint.setStyleSheet(f"font-size: 11px; color: {ACCENT}; opacity: 0.8;")
         self._apply_style(loaded=True)
+
+    def reset(self):
+        """Revert to the initial (unloaded) state — used when the app resets."""
+        self._path = None
+        self._icon.setText("↑")
+        self._icon.setStyleSheet(f"font-size: 20px; color: {BORDER_STR};")
+        self._main_text.setText("Drop CSV here or click to upload")
+        self._main_text.setStyleSheet(f"font-size: 13px; color: {TEXT_SEC};")
+        self._hint.setText("Pepperfry pending orders export")
+        self._hint.setStyleSheet(f"font-size: 11px; color: {BORDER_STR};")
+        self._apply_style(loaded=False)
 
     @property
     def path(self) -> str | None:
@@ -571,15 +587,10 @@ class MainWindow(QMainWindow):
         self._overall_fill.setFixedWidth(int(track_w * avg / 100))
 
     def _on_done(self, files_written: int):
-        self._set_status("done", f"Done · {files_written} files saved")
-        self._gen_btn.setEnabled(True)
-        self._gen_btn.setText("↺  New batch")
-        self._lock_inputs(False)
+        self._reset_to_initial_state(clear_inputs=True)
 
     def _on_error(self, message: str):
-        self._set_status("error", "Error — see details")
-        self._gen_btn.setEnabled(True)
-        self._lock_inputs(False)
+        self._reset_to_initial_state(clear_inputs=False)
         self._show_error(f"Generation failed:\n\n{message}")
 
     # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -606,6 +617,32 @@ class MainWindow(QMainWindow):
             bar.set_sub("Waiting…", "waiting")
         self._overall_pct.setText("0%")
         self._overall_fill.setFixedWidth(0)
+
+    def _reset_to_initial_state(self, clear_inputs: bool):
+        """
+        Revert the app to its initial state — status, generate button, and
+        progress bars always go back to their starting look.
+        """
+        # ── Reset status label and generate button ──
+        self._set_status("ready", "Ready")
+        self._gen_btn.setText("Generate")
+        self._gen_btn.setEnabled(True)
+        self._lock_inputs(False)
+
+        # ── Reset and hide progress bars ──
+        self._reset_bars()
+        self._bar_fo.hide()
+        self._bar_ca.hide()
+        self._bar_so.hide()
+        self._overall_widget.hide()
+
+        # ── Reset inputs (success only) ──
+        if clear_inputs:
+            self._csv_upload_button.reset()
+            self._upload_fo.reset()
+            self._upload_ca.reset()
+            self._upload_so.reset()
+            self._spin_order_no.setValue(1)
 
     def _show_error(self, message: str):
         dlg = QMessageBox(self)
