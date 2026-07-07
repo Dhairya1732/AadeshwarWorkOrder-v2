@@ -16,6 +16,8 @@ _COL_ORDER_DATE    = "Order Confirmed Date"
 _COL_IMAGE_URL     = "Image url"
 
 _DELIVERY_OFFSET   = timedelta(days=2)
+_DATE_FORMAT       = "%d-%m-%y"
+_DATETIME_FORMAT   = "%d-%m-%y %H:%M"
 
 
 class OrderParser:
@@ -34,14 +36,19 @@ class OrderParser:
         """
         df = pd.read_csv(csv_path)
         self._validate_columns(df)
+        df = df.sort_values(
+            by=_COL_ORDER_DATE,
+            key=lambda col: pd.to_datetime(col, format=_DATETIME_FORMAT),
+            ignore_index=True,
+        )
 
         work_orders = []
         # Track per-month counters for work order numbering
         month_counters: dict[str, int] = {}
 
         for _, row in df.iterrows():
-            ship_before     = self._parse_date(row[_COL_SHIP_BEFORE])
-            order_confirmed = self._parse_date(row[_COL_ORDER_DATE])
+            ship_before     = self._parse_date(row[_COL_SHIP_BEFORE], _DATE_FORMAT)
+            order_confirmed = self._parse_date(row[_COL_ORDER_DATE], _DATETIME_FORMAT)
             modified        = ship_before - _DELIVERY_OFFSET
 
             # Internal counter key — includes year so e.g. Jul/26 and Jul/27
@@ -93,17 +100,15 @@ class OrderParser:
                 f"Make sure you are uploading a Pepperfry pending orders export."
             )
 
-    def _parse_date(self, value: str) -> date:
+    def _parse_date(self, value: str, fmt: str) -> date:
         """
-        Parse a date string into a Python date object.
-        Pepperfry exports dates as dd-mm-yy (e.g. "09-07-26" = 9 July 2026),
-        so dayfirst=True is required — without it, pandas defaults to
-        month-first parsing and only falls back to day-first when the first
-        number can't possibly be a month (e.g. "27-06-26"), silently
-        misparsing the rest (e.g. "09-07-26" becomes 7 September instead of
-        9 July).
+        Parse a date string into a Python date object, using the explicit
+        fmt for the column being read (see _DATE_FORMAT / _DATETIME_FORMAT
+        above). Passing fmt explicitly avoids pandas' format-guessing, which 
+        is slower and would otherwise default to month-first parsing, silently 
+        misparsing dates like "09-07-26" as 7 September instead of 9 July.
         """
-        return pd.to_datetime(value, dayfirst=True).date()
+        return pd.to_datetime(value, format=fmt).date()
 
     @staticmethod
     def format_date(d: date) -> str:
