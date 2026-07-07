@@ -290,6 +290,21 @@ class FoamingWorkbook(WorkbookManager):
     def __init__(self, existing_path: str, template_bytes: bytes, month_key: str):
         super().__init__(existing_path, template_bytes, SHEET_FOAMING, month_key)
 
+    @staticmethod
+    def last_order_number(existing_path: str) -> int | None:
+        """
+        Return the order number of the last sheet in an already-uploaded
+        foaming workbook (sheets are named by order number — see add_order).
+        Returns None if the last sheet isn't a plain number, e.g. a fresh
+        workbook that has no order sheets yet.
+        """
+        wb = load_workbook(existing_path, read_only=True)
+        last_sheet_name = wb.sheetnames[-1]
+        try:
+            return int(last_sheet_name)
+        except ValueError:
+            return None
+
     def add_order(self, wo_number: str, order_date: date, modified_delivery: date,
                   customer_name: str, order_id: str, product_name: str, qty: int, image_url: str = "") -> None:
         sheet_name = wo_number.split("/")[-1]   # "G1/Jul/47" → "47"

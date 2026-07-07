@@ -4,6 +4,7 @@ from core.order_parser import OrderParser
 from core.template_loader import TemplateLoader
 from core.sheet_builder import SheetBuilder
 from models.work_order import WorkOrder
+from models.workbook import FoamingWorkbook
 
 
 class GenerateWorker(QThread):
@@ -30,6 +31,16 @@ class GenerateWorker(QThread):
 
     def run(self) -> None:
         try:
+            # ── Step 0: Starting order no. can't collide with orders already
+            # in the uploaded foaming workbook ──
+            last_order_no = FoamingWorkbook.last_order_number(self._foaming_path)
+            if last_order_no is not None and self._start_number <= last_order_no:
+                raise ValueError(
+                    f"Starting order no. ({self._start_number}) must be greater "
+                    f"than the last order no. already in the foaming workbook "
+                    f"({last_order_no})."
+                )
+            
             # ── Step 1: Parse CSV and build WorkOrder list ──
             parser = OrderParser()
             work_orders = parser.parse(self._csv_path, self._start_number)
