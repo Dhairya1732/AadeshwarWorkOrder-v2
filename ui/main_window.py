@@ -185,7 +185,16 @@ class CsvUploadButton(QWidget):
                 }}
             """)
 
+    def set_enabled_interaction(self, enabled: bool):
+        self.setCursor(
+            Qt.CursorShape.PointingHandCursor if enabled
+            else Qt.CursorShape.ForbiddenCursor
+        )
+        self._can_toggle = enabled
+
     def mousePressEvent(self, event):
+        if not getattr(self, "_can_toggle", True):
+            return
         path, _ = QFileDialog.getOpenFileName(
             self, "Select pending orders CSV", "", "CSV Files (*.csv)"
         )
@@ -586,7 +595,7 @@ class MainWindow(QMainWindow):
         self._status_text.setText(text)
 
     def _lock_inputs(self, locked: bool):
-        self._csv_upload_button.setEnabled(not locked)
+        self._csv_upload_button.set_enabled_interaction(not locked)
         self._spin_order_no.setEnabled(not locked)
         for file in (self._upload_fo, self._upload_ca, self._upload_so):
             file.set_enabled_interaction(not locked)

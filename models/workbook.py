@@ -323,7 +323,7 @@ class FoamingWorkbook(WorkbookManager):
 
     def _filename(self) -> str:
         month = self._month_key.replace("/", " ")
-        return f"FO - {month}.xlsx"
+        return f"Test FO - {month}.xlsx"
 
 
 class CarpenterWorkbook(WorkbookManager):
@@ -363,7 +363,7 @@ class CarpenterWorkbook(WorkbookManager):
 
     def _filename(self) -> str:
         month = self._month_key.replace("/", " ")
-        return f"CA - {month}.xlsx"
+        return f"Test CA - {month}.xlsx"
 
 
 class SalesWorkbook(WorkbookManager):
@@ -423,4 +423,4 @@ class SalesWorkbook(WorkbookManager):
 
     def _filename(self) -> str:
         month = self._month_key.replace("/", " ")
-        return f"SO - {month}.xlsx"
+        return f"Test SO - {month}.xlsx"
