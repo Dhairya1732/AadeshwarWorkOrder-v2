@@ -8,9 +8,7 @@ from PIL import Image as PILImage
 from openpyxl import load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.drawing.image import Image as XLImage
-from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, AnchorMarker
-from openpyxl.drawing.xdr import XDRPositiveSize2D
-from openpyxl.utils.units import pixels_to_EMU
+from openpyxl.drawing.spreadsheet_drawing import TwoCellAnchor, AnchorMarker
 from openpyxl.utils import get_column_letter
 from core.order_parser import OrderParser
 from core.template_loader import SHEET_FOAMING, SHEET_CARPENTER, SHEET_SALES
@@ -234,11 +232,13 @@ class WorkbookManager:
         (ws.sheet_format.defaultColWidth / defaultRowHeight) for any
         column/row that has no explicit dimension entry — these reflect
         the template's actual font/size and can differ from Excel's
-        generic Calibri-11 defaults (e.g. 14.4pt row height instead of
-        15.0pt), which previously caused embedded images to be scaled
-        against a box slightly larger than the true cell range and spill
-        past the border. The class constants below are only a last-resort
+        generic Calibri-11 defaults. The class constants below are only a last-resort
         fallback if the sheet doesn't specify its own defaults.
+
+        Only used to estimate an aspect ratio now (see
+        _letterbox_to_aspect_ratio) — the anchor itself is a TwoCellAnchor
+        tied to real cell references, so any imprecision here just means
+        slightly uneven padding, not a misplaced or overflowing image.
         """
         default_col_chars = ws.sheet_format.defaultColWidth or self._DEFAULT_COL_WIDTH_CHARS
         default_row_pts    = ws.sheet_format.defaultRowHeight or self._DEFAULT_ROW_HEIGHT_PT
@@ -268,6 +268,10 @@ class WorkbookManager:
         blank. Silently skips (with a logged warning) on any failure —
         a missing/broken product photo shouldn't block the whole order
         from being written to the workbook.
+
+        The image is padded to the range's aspect ratio (see
+        _letterbox_to_aspect_ratio) and anchored with a TwoCellAnchor
+        spanning min_col:max_col / min_row:max_row.
         """
         if not image_url:
             logger.warning("No image URL provided — skipping image embed.")
@@ -276,35 +280,50 @@ class WorkbookManager:
         try:
             resp = requests.get(image_url, timeout=timeout)
             resp.raise_for_status()
-            raw = resp.content
-            src_w, src_h = PILImage.open(io.BytesIO(raw)).size
+            src_img = PILImage.open(io.BytesIO(resp.content)).convert("RGBA")
         except Exception as exc:
             logger.warning(f"Could not fetch/read image from {image_url}: {exc}")
             return
 
         target_w, target_h = self._range_pixel_size(ws, min_col, max_col, min_row, max_row)
 
-        scale   = min(target_w / src_w, target_h / src_h)
-        disp_w  = src_w * scale
-        disp_h  = src_h * scale
+        target_w, target_h = self._range_pixel_size(ws, min_col, max_col, min_row, max_row)
+        padded = self._letterbox_to_aspect_ratio(src_img, target_w / target_h)
 
-        xl_img = XLImage(io.BytesIO(raw))
-        xl_img.width  = disp_w
-        xl_img.height = disp_h
+        buffer = io.BytesIO()
+        padded.save(buffer, format="PNG")
+        buffer.seek(0)
 
-        # Center within the range: offset in EMU from the top-left cell of
-        # the range (col/row are 0-indexed in openpyxl's anchor API).
-        off_x_px = (target_w - disp_w) / 2
-        off_y_px = (target_h - disp_h) / 2
-
-        marker = AnchorMarker(
-            col=min_col - 1, colOff=pixels_to_EMU(max(off_x_px, 0)),
-            row=min_row - 1, rowOff=pixels_to_EMU(max(off_y_px, 0)),
+        xl_img = XLImage(buffer)
+        xl_img.anchor = TwoCellAnchor(
+            editAs="twoCell",
+            _from=AnchorMarker(col=min_col - 1, colOff=0, row=min_row - 1, rowOff=0),
+            to=AnchorMarker(col=max_col, colOff=0, row=max_row, rowOff=0),
         )
-        size = XDRPositiveSize2D(pixels_to_EMU(disp_w), pixels_to_EMU(disp_h))
-        xl_img.anchor = OneCellAnchor(_from=marker, ext=size)
 
         ws.add_image(xl_img)
+
+    @staticmethod
+    def _letterbox_to_aspect_ratio(img: PILImage.Image, target_ratio: float) -> PILImage.Image:
+        """
+        Pad img with transparent margin so its aspect ratio matches
+        target_ratio, centering the original photo within the new
+        canvas. This is what lets _embed_scaled_image hand Excel a plain
+        stretch-to-fill TwoCellAnchor and still get scaled-to-fit,
+        centered output — the padding does the centering/fitting work
+        that used to be done with pixel offsets on the anchor itself.
+        """
+        src_w, src_h = img.size
+        src_ratio = src_w / src_h
+
+        if src_ratio > target_ratio:
+            canvas_w, canvas_h = src_w, round(src_w / target_ratio)
+        else:
+            canvas_w, canvas_h = round(src_h * target_ratio), src_h
+
+        canvas = PILImage.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+        canvas.paste(img, ((canvas_w - src_w) // 2, (canvas_h - src_h) // 2), img)
+        return canvas
 
     def _apply_print_setup(self, ws: Worksheet) -> None:
         """
