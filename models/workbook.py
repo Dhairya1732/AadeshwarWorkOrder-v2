@@ -3,6 +3,7 @@ import requests
 import logging
 from copy import copy
 from datetime import date
+from functools import lru_cache
 from PIL import Image as PILImage
 from openpyxl import load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
@@ -48,7 +49,16 @@ class WorkbookManager:
         self._month_key       = month_key
         self._wb              = load_workbook(existing_path)
 
-    def _copy_template(self, sheet_name: str) -> Worksheet:
+    @staticmethod
+    @lru_cache(maxsize=None)
+    def _load_template_workbook(template_bytes: bytes):
+        """
+        Parse the raw template bytes into an openpyxl Workbook once, cached
+        on the bytes object itself.
+        """
+        return load_workbook(io.BytesIO(template_bytes))
+
+    def _copy_template(self, sheet_name: str, max_row: int = None) -> Worksheet:
         """
         Load a fresh copy of the template workbook from bytes and manually
         replicate the relevant sheet into self._wb.
@@ -56,13 +66,16 @@ class WorkbookManager:
         temporary workbook can't be copy_worksheet'd directly into self._wb —
         instead we create a blank sheet here and transplant cell values,
         styles, merges, dimensions, and images one by one.
+
+        max_row optionally caps how many of the template's rows get copied
+        in.
         """
-        tmp_wb = load_workbook(io.BytesIO(self._template_bytes))
+        tmp_wb = self._load_template_workbook(self._template_bytes)
         tmp_ws = tmp_wb[self._template_sheet]
         ws     = self._wb.create_sheet(title=sheet_name)
 
-        self._copy_dimensions(tmp_ws, ws)
-        self._copy_cells(tmp_ws, ws)
+        self._copy_dimensions(tmp_ws, ws, max_row)
+        self._copy_cells(tmp_ws, ws, max_row)
         self._copy_merged_cells(tmp_ws, ws)
         self._copy_images(tmp_ws, ws)
 
@@ -72,12 +85,14 @@ class WorkbookManager:
         return ws
 
     @staticmethod
-    def _copy_dimensions(src: Worksheet, dst: Worksheet) -> None:
+    def _copy_dimensions(src: Worksheet, dst: Worksheet, max_row: int = None) -> None:
         for col_letter, dim in src.column_dimensions.items():
             dst.column_dimensions[col_letter].width  = dim.width
             dst.column_dimensions[col_letter].hidden = dim.hidden
 
         for row_idx, dim in src.row_dimensions.items():
+            if max_row is not None and row_idx > max_row:
+                continue
             dst_dim                = dst.row_dimensions[row_idx]
             dst_dim.height          = dim.height
             dst_dim.hidden          = dim.hidden
@@ -85,8 +100,8 @@ class WorkbookManager:
             dst_dim.collapsed       = dim.collapsed
 
     @staticmethod
-    def _copy_cells(src: Worksheet, dst: Worksheet) -> None:
-        for row in src.iter_rows():
+    def _copy_cells(src: Worksheet, dst: Worksheet, max_row: int = None) -> None:
+        for row in src.iter_rows(max_row=max_row):
             for cell in row:
                 new_cell = dst.cell(row=cell.row, column=cell.column, value=cell.value)
                 if cell.has_style:
@@ -108,30 +123,37 @@ class WorkbookManager:
         for img in src._images:
             dst.add_image(copy(img), img.anchor)
 
-    @staticmethod
-    def _copy_row_style(ws: Worksheet, src_row: int, dst_row: int, max_col: int = None) -> None:
+    @classmethod
+    def _copy_row(cls, src_ws: Worksheet, src_row: int, dst_ws: Worksheet, dst_row: int,
+                  max_col: int = None, copy_values: bool = True) -> None:
         """
-        Clone cell styles and row height from src_row onto dst_row.
-        Used by Carpenter/Sales workbooks when appending a new order row
-        beyond the template's first data row — ws.cell() creates plain,
-        unstyled cells by default, so without this the appended rows would
-        be missing the borders/fonts/height present on the template row.
+        Copy one row's styles — and, unless copy_values=False, its values
+        too — from src_row on src_ws to dst_row on dst_ws. src/dst can be
+        the same worksheet or different ones, and the row index can shift.
 
-        max_col defaults to the worksheet's own column count rather than a
-        caller-supplied constant — Carpenter (9 cols) and Sales (12 cols)
-        templates don't have the same width, and a hardcoded value silently
-        drifts out of sync (and under-styles trailing columns) if either
-        template's column count ever changes.
+        Generalizes two things this app needs: appending a plain new order
+        row styled like the template's data row (copy_values=False — see
+        _copy_row_style below), and transplanting a fully-formed row like
+        the Carpenter Total row onto a different sheet entirely, values
+        included (see CarpenterWorkbook._append_total_row).
+
+        max_col defaults to src_ws's own column count rather than a
+        caller-supplied constant, for the same reason _copy_row_style
+        always has: Carpenter (9 cols) and Sales (12 cols) templates
+        don't share a width, and a hardcoded value silently drifts out of
+        sync if either template's column count ever changes.
         """
-        if dst_row == src_row:
+        if src_ws is dst_ws and src_row == dst_row:
             return
 
         if max_col is None:
-            max_col = ws.max_column
+            max_col = src_ws.max_column
 
         for col in range(1, max_col + 1):
-            src_cell = ws.cell(row=src_row, column=col)
-            dst_cell = ws.cell(row=dst_row, column=col)
+            src_cell = src_ws.cell(row=src_row, column=col)
+            dst_cell = dst_ws.cell(row=dst_row, column=col)
+            if copy_values:
+                dst_cell.value = src_cell.value
             if src_cell.has_style:
                 dst_cell.font          = copy(src_cell.font)
                 dst_cell.border        = copy(src_cell.border)
@@ -140,9 +162,33 @@ class WorkbookManager:
                 dst_cell.protection    = copy(src_cell.protection)
                 dst_cell.number_format = src_cell.number_format
 
-        src_dim = ws.row_dimensions[src_row]
-        dst_dim = ws.row_dimensions[dst_row]
+        src_dim = src_ws.row_dimensions[src_row]
+        dst_dim = dst_ws.row_dimensions[dst_row]
         dst_dim.height = src_dim.height
+
+    @classmethod
+    def _copy_row_style(cls, ws: Worksheet, src_row: int, dst_row: int, max_col: int = None) -> None:
+        """
+        Clone cell styles and row height from src_row onto dst_row, same
+        worksheet, values left untouched. Used by Carpenter/Sales
+        workbooks when appending a new order row beyond the template's
+        first data row — ws.cell() creates plain, unstyled cells by
+        default, so without this the appended rows would be missing the
+        borders/fonts/height present on the template row.
+        """
+        cls._copy_row(ws, src_row, ws, dst_row, max_col, copy_values=False)
+
+    def _next_empty_row(self, ws: Worksheet, check_column: int = 1) -> int:
+        """
+        First row from _DATA_START_ROW downward with nothing in
+        check_column — i.e. the next free row to write an order into, or
+        (reused by CarpenterWorkbook._append_total_row) the row directly
+        below the last order already written.
+        """
+        row = self._DATA_START_ROW
+        while ws.cell(row=row, column=check_column).value is not None:
+            row += 1
+        return row
 
     def has_sheet(self, sheet_name: str) -> bool:
         return sheet_name in self._wb.sheetnames
@@ -345,19 +391,28 @@ class CarpenterWorkbook(WorkbookManager):
     """
     One sheet per order date, named dd.mm.yyyy.
     Multiple orders on the same date are appended as rows on the same sheet.
+
+    The template's last row ("Total") is captured once
+    (see _total_row_source) and transplanted onto each sheet this session
+    creates, directly below that day's last order row, once save() runs
+    (i.e. once all of that day's orders are in). Sheets already present in
+    the uploaded workbook are left alone.
     """
 
     _DATA_START_ROW = 4
 
     def __init__(self, existing_path: str, template_bytes: bytes, month_key: str):
         super().__init__(existing_path, template_bytes, SHEET_CARPENTER, month_key)
+        self._new_sheet_names: set[str] = set()   # sheets created THIS session
 
     def add_order(self, wo_number: str, modified_delivery: date, sku_id: str,
                   order_id: str, qty: int, order_date: date) -> None:
         sheet_name = self.date_to_sheet_name(order_date)
 
         if not self.has_sheet(sheet_name):
-            self._copy_template(sheet_name)
+            _, total_row = self._total_row_source()
+            self._copy_template(sheet_name, max_row=total_row - 1)
+            self._new_sheet_names.add(sheet_name)
 
         ws       = self._wb[sheet_name]
         next_row = self._next_empty_row(ws)
@@ -370,12 +425,29 @@ class CarpenterWorkbook(WorkbookManager):
         # columns 5 (Fabric), 6 (Remark), 7 (Inches), 8 (Total Inches) — manual
         ws.cell(row=next_row, column=9).value = order_id
 
-    def _next_empty_row(self, ws: Worksheet) -> int:
-        row = self._DATA_START_ROW
-        while ws.cell(row=row, column=1).value is not None:
-            row += 1
-        return row
+    def save(self) -> str:
+        """
+        Append the captured Total row to every sheet created THIS session
+        — directly below its last order row, now that all of that sheet's
+        orders are in — then hand off to the base save().
+        """
+        for sheet_name in self._new_sheet_names:
+            self._append_total_row(self._wb[sheet_name])
+        return super().save()
+    
+    def _append_total_row(self, ws: Worksheet) -> None:
+        total_ws, total_row = self._total_row_source()
+        self._copy_row(total_ws, total_row, ws, self._next_empty_row(ws))
 
+    def _total_row_source(self) -> tuple[Worksheet, int]:
+        """
+        The template's own Carpenter worksheet plus the row index of its
+        Total row (the template's last row).
+        """
+        tmp_wb = self._load_template_workbook(self._template_bytes)
+        tmp_ws = tmp_wb[SHEET_CARPENTER]
+        return tmp_ws, tmp_ws.max_row
+    
     def _filename(self) -> str:
         month = self._month_key.replace("/", " ")
         return f"Test CA - {month}.xlsx"
@@ -429,12 +501,6 @@ class SalesWorkbook(WorkbookManager):
             cell.value = cell.value.replace(
                 self._DATE_PLACEHOLDER, OrderParser.format_date(order_date)
             )
-
-    def _next_empty_row(self, ws: Worksheet) -> int:
-        row = self._DATA_START_ROW
-        while ws.cell(row=row, column=1).value is not None:
-            row += 1
-        return row
 
     def _filename(self) -> str:
         month = self._month_key.replace("/", " ")

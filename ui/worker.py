@@ -20,6 +20,8 @@ class GenerateWorker(QThread):
     finished            = pyqtSignal(int)        # files_written
     error                = pyqtSignal(str)
 
+    _template_loader = TemplateLoader()
+
     def __init__(self, csv_path: str, foaming_path: str,
                  carpenter_path: str, sales_path: str, start_number: int):
         super().__init__()
@@ -49,16 +51,15 @@ class GenerateWorker(QThread):
             for wo in work_orders:
                 wo.stripped_name = WorkOrder.strip_colour(wo.source.product_name)
 
-            # ── Step 3: Fetch templates from Google Drive ──
-            template_loader = TemplateLoader()
-            template_loader.fetch()
+            # ── Step 3: Check for template changes ──
+            self._template_loader.fetch()
 
             # ── Step 4: Build sheets ──
             builder = SheetBuilder(
                 foaming_path   = self._foaming_path,
                 carpenter_path = self._carpenter_path,
                 sales_path     = self._sales_path,
-                template_bytes = template_loader.raw_bytes,
+                template_bytes = self._template_loader.raw_bytes,
             )
 
             total = len(work_orders)
