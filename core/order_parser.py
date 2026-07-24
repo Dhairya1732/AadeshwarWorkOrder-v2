@@ -25,12 +25,17 @@ class OrderParser:
     Reads a Pepperfry pending orders CSV and produces a list of WorkOrder objects.
     Handles parsing, type conversion, and modified delivery date computation.
     work_order_no and stripped_name are left blank — filled before SheetBuilder runs.
+
+    start_number only applies to the month matching reference_date's calendar
+    month
     """
 
-    def parse(self, csv_path: str, start_number: int) -> list[WorkOrder]:
+    def parse(self, csv_path: str, start_number: int, reference_date: date | None = None) -> list[WorkOrder]:
         """
         Read the CSV at csv_path and return one WorkOrder per row.
-        work_order_no is assigned sequentially from start_number.
+        work_order_no is assigned sequentially from start_number within the
+        active month (see class docstring); reference_date defaults to today
+        and is settable for tests.
         Raises ValueError if required columns are missing.
         Raises FileNotFoundError if the path does not exist.
         """
@@ -41,6 +46,8 @@ class OrderParser:
             key=lambda col: pd.to_datetime(col, format=_DATETIME_FORMAT),
             ignore_index=True,
         )
+
+        active_month = (reference_date or date.today()).strftime("%b/%y")
 
         work_orders = []
         # Track per-month counters for work order numbering
@@ -56,9 +63,9 @@ class OrderParser:
             counter_key = modified.strftime("%b/%y")    # e.g. "Jul/26"
             month_abbr  = modified.strftime("%b")        # e.g. "Jul" — used in wo_number
 
-            # Assign work order number — resets per month, starts at start_number
+            # Assign work order number — resets per month.
             if counter_key not in month_counters:
-                month_counters[counter_key] = start_number
+                month_counters[counter_key] = start_number if counter_key == active_month else 1
             else:
                 month_counters[counter_key] += 1
 

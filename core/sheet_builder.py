@@ -1,3 +1,5 @@
+from datetime import date
+
 from models.work_order import WorkOrder
 from models.workbook import FoamingWorkbook, CarpenterWorkbook, SalesWorkbook
 
@@ -6,8 +8,9 @@ class SheetBuilder:
     """
     Routes a list of WorkOrder objects into the correct monthly workbooks.
     Maintains one WorkbookManager per unique month encountered, keyed by
-    month_key (e.g. "Jul/26"). New months get a fresh workbook starting
-    from the user's uploaded active sheet.
+    month_key (e.g. "Jul/26"). Only the month_key matching reference_date's
+    calendar month continues from the user's uploaded active file — every
+    other month_key gets a blank workbook.
 
     Usage:
         builder = SheetBuilder(foaming_path, carpenter_path, sales_path, template_bytes)
@@ -16,11 +19,16 @@ class SheetBuilder:
     """
 
     def __init__(self, foaming_path: str, carpenter_path: str,
-                 sales_path: str, template_bytes: bytes):
+                 sales_path: str, template_bytes: bytes, reference_date: date | None = None):
         self._foaming_path   = foaming_path
         self._carpenter_path = carpenter_path
         self._sales_path     = sales_path
         self._template_bytes = template_bytes
+
+        # The one month_key allowed to continue from the uploaded active
+        # file — everything else starts blank. reference_date is settable
+        # for tests; real runs use today's calendar month.
+        self._active_month = (reference_date or date.today()).strftime("%b %y")
 
         # One WorkbookManager per unique month encountered
         self._foaming_books:   dict[str, FoamingWorkbook]   = {}
@@ -53,16 +61,26 @@ class SheetBuilder:
         ):
             paths.append(book.save())
         return paths
+    
+    def _book_for(self, books: dict, month_key: str, path: str, cls):
+        """
+        Return the WorkbookManager for month_key in books, creating one if
+        needed. Only month_key == self._active_month continues from the
+        uploaded active file; every other month_key starts blank — this
+        holds regardless of the order add_to_* is called in.
+        """
+        book = books.get(month_key)
+        if book is None:
+            book = cls(path, self._template_bytes, month_key, start_blank=month_key != self._active_month)
+            books[month_key] = book
+        return book
 
     # ── Foaming ─────────────────────────────────────────────────────────────────
 
     def add_to_foaming(self, wo: WorkOrder) -> None:
         month_key = wo.workbook_month   # e.g. "Jul 26" — based on modified_delivery, same as wo_number
 
-        book = self._foaming_books.get(month_key)
-        if book is None:
-            book = FoamingWorkbook(self._foaming_path, self._template_bytes, month_key)
-            self._foaming_books[month_key] = book
+        book = self._book_for(self._foaming_books, month_key, self._foaming_path, FoamingWorkbook)
 
         book.add_order(
             wo_number          = wo.work_order_no,
@@ -80,10 +98,7 @@ class SheetBuilder:
     def add_to_carpenter(self, wo: WorkOrder) -> None:
         month_key = wo.workbook_month   # e.g. "Jul 26" — based on modified_delivery, same as wo_number
 
-        book = self._carpenter_books.get(month_key)
-        if book is None:
-            book = CarpenterWorkbook(self._carpenter_path, self._template_bytes, month_key)
-            self._carpenter_books[month_key] = book
+        book = self._book_for(self._carpenter_books, month_key, self._carpenter_path, CarpenterWorkbook)
 
         book.add_order(
             wo_number          = wo.work_order_no,
@@ -99,10 +114,7 @@ class SheetBuilder:
     def add_to_sales(self, wo: WorkOrder) -> None:
         month_key = wo.workbook_month   # e.g. "Jul 26" — based on modified_delivery, same as wo_number
 
-        book = self._sales_books.get(month_key)
-        if book is None:
-            book = SalesWorkbook(self._sales_path, self._template_bytes, month_key)
-            self._sales_books[month_key] = book
+        book = self._book_for(self._sales_books, month_key, self._sales_path, SalesWorkbook)
 
         book.add_order(
             wo_number           = wo.work_order_no,

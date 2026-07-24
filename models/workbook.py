@@ -5,7 +5,7 @@ from copy import copy
 from datetime import date
 from functools import lru_cache
 from PIL import Image as PILImage
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.drawing.spreadsheet_drawing import TwoCellAnchor, AnchorMarker
@@ -19,12 +19,18 @@ class WorkbookManager:
     """
     Base class for managing a monthly Excel workbook.
     Loads an existing workbook uploaded by the user and appends new sheets to it.
-    A new workbook is created only when the month changes.
+    A new, blank workbook is created instead whenever start_blank=True — used
+    by SheetBuilder for every month after the first one it encounters, so
+    that a run spanning two months doesn't dump the second month's orders
+    into a copy of the first month's file. See SheetBuilder._book_for.
 
     template_bytes  — raw .xlsx bytes from TemplateLoader.raw_bytes
     template_sheet  — which sheet name inside the template to copy from
-    existing_path   — path to the user-uploaded active workbook
+    existing_path   — path to the user-uploaded active workbook; still used
+                       as the output directory even when start_blank=True
     month_key       — e.g. "Jul/26", used for the output filename
+    start_blank     — skip loading existing_path's sheets, start from an
+                       empty workbook instead
     """
 
     # Excel's default column width/row height when no explicit dimension is set,
@@ -40,12 +46,22 @@ class WorkbookManager:
     _PAGE_ORIENTATION  = "landscape"   # overridden by Foaming (portrait)
 
     def __init__(self, existing_path: str, template_bytes: bytes,
-                 template_sheet: str, month_key: str):
+                 template_sheet: str, month_key: str, start_blank: bool = False):
         self._source_path     = existing_path
         self._template_bytes  = template_bytes
         self._template_sheet  = template_sheet
         self._month_key       = month_key
-        self._wb              = load_workbook(existing_path)
+        self._wb              = self._new_blank_workbook() if start_blank else load_workbook(existing_path)
+
+    @staticmethod
+    def _new_blank_workbook() -> Workbook:
+        """
+        A workbook with no sheets, used instead of existing_path's own
+        sheets whenever start_blank=True
+        """
+        wb = Workbook()
+        wb.remove(wb.active)
+        return wb
 
     @staticmethod
     @lru_cache(maxsize=None)
@@ -352,8 +368,9 @@ class FoamingWorkbook(WorkbookManager):
 
     _PAGE_ORIENTATION = "portrait"
 
-    def __init__(self, existing_path: str, template_bytes: bytes, month_key: str):
-        super().__init__(existing_path, template_bytes, SHEET_FOAMING, month_key)
+    def __init__(self, existing_path: str, template_bytes: bytes, month_key: str,
+                 start_blank: bool = False):
+        super().__init__(existing_path, template_bytes, SHEET_FOAMING, month_key, start_blank)
 
     @staticmethod
     def last_order_number(existing_path: str) -> int | None:
@@ -403,7 +420,7 @@ class FoamingWorkbook(WorkbookManager):
 
     def _filename(self) -> str:
         month = self._month_key.replace("/", " ")
-        return f"Test FO - {month}.xlsx"
+        return f"FO - {month}.xlsx"
 
 
 class CarpenterWorkbook(WorkbookManager):
@@ -420,8 +437,9 @@ class CarpenterWorkbook(WorkbookManager):
 
     _DATA_START_ROW = 4
 
-    def __init__(self, existing_path: str, template_bytes: bytes, month_key: str):
-        super().__init__(existing_path, template_bytes, SHEET_CARPENTER, month_key)
+    def __init__(self, existing_path: str, template_bytes: bytes, month_key: str,
+                 start_blank: bool = False):
+        super().__init__(existing_path, template_bytes, SHEET_CARPENTER, month_key, start_blank)
         self._new_sheet_names: set[str] = set()   # sheets created THIS session
 
     def add_order(self, wo_number: str, modified_delivery: date, sku_id: str,
@@ -469,7 +487,7 @@ class CarpenterWorkbook(WorkbookManager):
     
     def _filename(self) -> str:
         month = self._month_key.replace("/", " ")
-        return f"Test CA - {month}.xlsx"
+        return f"CA - {month}.xlsx"
 
 
 class SalesWorkbook(WorkbookManager):
@@ -481,8 +499,9 @@ class SalesWorkbook(WorkbookManager):
     _DATA_START_ROW = 4
     _DATE_PLACEHOLDER = "[Order Confirmed Date]"
 
-    def __init__(self, existing_path: str, template_bytes: bytes, month_key: str):
-        super().__init__(existing_path, template_bytes, SHEET_SALES, month_key)
+    def __init__(self, existing_path: str, template_bytes: bytes, month_key: str,
+                 start_blank: bool = False):
+        super().__init__(existing_path, template_bytes, SHEET_SALES, month_key, start_blank)
 
     def add_order(self, wo_number: str, modified_delivery: date,
                   customer_name: str, product_name: str, order_id: str,
@@ -523,4 +542,4 @@ class SalesWorkbook(WorkbookManager):
 
     def _filename(self) -> str:
         month = self._month_key.replace("/", " ")
-        return f"Test SO - {month}.xlsx"
+        return f"SO - {month}.xlsx"

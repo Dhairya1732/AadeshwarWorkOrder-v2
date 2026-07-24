@@ -1,3 +1,5 @@
+from datetime import date
+
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from core.order_parser import OrderParser
@@ -44,8 +46,9 @@ class GenerateWorker(QThread):
                 )
             
             # ── Step 1: Parse CSV and build WorkOrder list ──
+            reference_date = date.today()
             parser = OrderParser()
-            work_orders = parser.parse(self._csv_path, self._start_number)
+            work_orders = parser.parse(self._csv_path, self._start_number, reference_date)
 
             # ── Step 2: Strip colour from product names ──
             for wo in work_orders:
@@ -60,6 +63,7 @@ class GenerateWorker(QThread):
                 carpenter_path = self._carpenter_path,
                 sales_path     = self._sales_path,
                 template_bytes = self._template_loader.raw_bytes,
+                reference_date = reference_date,
             )
 
             total = len(work_orders)
