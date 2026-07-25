@@ -1,12 +1,13 @@
-from datetime import date
+import threading
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from core.order_parser import OrderParser
 from core.template_loader import TemplateLoader
 from core.sheet_builder import SheetBuilder
+from core.validation import validate_start_number
+from models.month_plan import MonthPlan
 from models.work_order import WorkOrder
-from models.workbook import FoamingWorkbook
 
 
 class GenerateWorker(QThread):
@@ -14,6 +15,11 @@ class GenerateWorker(QThread):
     Runs the full work order generation pipeline off the main UI thread.
     Emits progress signals per sheet type so MainWindow can update its
     three progress bars independently.
+
+    Also emits new_month_needed whenever OrderParser (see _prompt_new_month)
+    discovers orders for a month it hasn't planned for yet — MainWindow
+    must respond by calling set_new_month_result before this thread can
+    continue, since it blocks on that.
     """
 
     foaming_progress   = pyqtSignal(int, str)   # (percent, status message)
@@ -21,6 +27,7 @@ class GenerateWorker(QThread):
     sales_progress      = pyqtSignal(int, str)
     finished            = pyqtSignal(int)        # files_written
     error                = pyqtSignal(str)
+    new_month_needed     = pyqtSignal(str, object)   # (month_key, threading.Event to set() once answered)
 
     _template_loader = TemplateLoader()
 
@@ -32,23 +39,39 @@ class GenerateWorker(QThread):
         self._carpenter_path = carpenter_path
         self._sales_path     = sales_path
         self._start_number   = start_number
+        self._new_month_result: MonthPlan | None = None   # filled by set_new_month_result
+
+    def set_new_month_result(self, plan: MonthPlan) -> None:
+        """Called from the GUI thread with the user's answer to a new_month_needed prompt."""
+        self._new_month_result = plan
+
+    def _prompt_new_month(self, month_key: str) -> MonthPlan:
+        """
+        Passed to OrderParser as on_new_month. Emits new_month_needed and
+        blocks this thread on the accompanying Event until MainWindow's
+        connected slot has shown the modal prompt on the GUI thread and
+        reported the result back via set_new_month_result.
+        """
+        answered = threading.Event()
+        self.new_month_needed.emit(month_key, answered)
+        answered.wait()
+        return self._new_month_result
 
     def run(self) -> None:
         try:
             # ── Step 0: Starting order no. can't collide with orders already
             # in the uploaded foaming workbook ──
-            last_order_no = FoamingWorkbook.last_order_number(self._foaming_path)
-            if last_order_no is not None and self._start_number <= last_order_no:
-                raise ValueError(
-                    f"Starting order no. ({self._start_number}) must be greater "
-                    f"than the last order no. already in the foaming workbook "
-                    f"({last_order_no})."
-                )
+            validate_start_number(self._foaming_path, self._start_number)
             
             # ── Step 1: Parse CSV and build WorkOrder list ──
-            reference_date = date.today()
+            month1_plan = MonthPlan(
+                start_number   = self._start_number,
+                foaming_path   = self._foaming_path,
+                carpenter_path = self._carpenter_path,
+                sales_path     = self._sales_path,
+            )
             parser = OrderParser()
-            work_orders = parser.parse(self._csv_path, self._start_number, reference_date)
+            work_orders, month_plans = parser.parse(self._csv_path, month1_plan, self._prompt_new_month)
 
             # ── Step 2: Strip colour from product names ──
             for wo in work_orders:
@@ -59,11 +82,9 @@ class GenerateWorker(QThread):
 
             # ── Step 4: Build sheets ──
             builder = SheetBuilder(
-                foaming_path   = self._foaming_path,
-                carpenter_path = self._carpenter_path,
-                sales_path     = self._sales_path,
+                month_plans    = month_plans,
                 template_bytes = self._template_loader.raw_bytes,
-                reference_date = reference_date,
+                csv_path       = self._csv_path,
             )
 
             total = len(work_orders)

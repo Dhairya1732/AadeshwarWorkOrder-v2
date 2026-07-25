@@ -1,5 +1,6 @@
-from datetime import date
+import os
 
+from models.month_plan import MonthPlan
 from models.work_order import WorkOrder
 from models.workbook import FoamingWorkbook, CarpenterWorkbook, SalesWorkbook
 
@@ -8,27 +9,23 @@ class SheetBuilder:
     """
     Routes a list of WorkOrder objects into the correct monthly workbooks.
     Maintains one WorkbookManager per unique month encountered, keyed by
-    month_key (e.g. "Jul/26"). Only the month_key matching reference_date's
-    calendar month continues from the user's uploaded active file — every
-    other month_key gets a blank workbook.
+    month_key (e.g. "Jul 26") — the same key OrderParser used to build
+    month_plans, so which file (if any) each month continues from is
+    already decided by the time SheetBuilder runs; no guessing here.
 
     Usage:
-        builder = SheetBuilder(foaming_path, carpenter_path, sales_path, template_bytes)
-        builder.build(work_orders, progress_callback=...)
+        builder = SheetBuilder(month_plans, template_bytes, csv_path)
+        builder.build(work_orders)
         paths = builder.save_all()
     """
 
-    def __init__(self, foaming_path: str, carpenter_path: str,
-                 sales_path: str, template_bytes: bytes, reference_date: date | None = None):
-        self._foaming_path   = foaming_path
-        self._carpenter_path = carpenter_path
-        self._sales_path     = sales_path
+    def __init__(self, month_plans: dict[str, MonthPlan], template_bytes: bytes, csv_path: str):
+        self._month_plans    = month_plans
         self._template_bytes = template_bytes
 
-        # The one month_key allowed to continue from the uploaded active
-        # file — everything else starts blank. reference_date is settable
-        # for tests; real runs use today's calendar month.
-        self._active_month = (reference_date or date.today()).strftime("%b %y")
+        # Output directory for any month whose plan has no uploaded file —
+        # see WorkbookManager.save().
+        self._fallback_dir = os.path.dirname(csv_path)
 
         # One WorkbookManager per unique month encountered
         self._foaming_books:   dict[str, FoamingWorkbook]   = {}
@@ -62,16 +59,18 @@ class SheetBuilder:
             paths.append(book.save())
         return paths
     
-    def _book_for(self, books: dict, month_key: str, path: str, cls):
+    def _book_for(self, books: dict, month_key: str, path_attr: str, cls):
         """
         Return the WorkbookManager for month_key in books, creating one if
-        needed. Only month_key == self._active_month continues from the
-        uploaded active file; every other month_key starts blank — this
-        holds regardless of the order add_to_* is called in.
+        needed. The path to continue from (or None, to start blank) comes
+        straight off that month's MonthPlan — path_attr picks out which of
+        its three paths applies (e.g. "foaming_path").
         """
         book = books.get(month_key)
         if book is None:
-            book = cls(path, self._template_bytes, month_key, start_blank=month_key != self._active_month)
+            plan = self._month_plans[month_key]
+            path = getattr(plan, path_attr)
+            book = cls(path, self._template_bytes, month_key, self._fallback_dir)
             books[month_key] = book
         return book
 
@@ -80,7 +79,7 @@ class SheetBuilder:
     def add_to_foaming(self, wo: WorkOrder) -> None:
         month_key = wo.workbook_month   # e.g. "Jul 26" — based on modified_delivery, same as wo_number
 
-        book = self._book_for(self._foaming_books, month_key, self._foaming_path, FoamingWorkbook)
+        book = self._book_for(self._foaming_books, month_key, "foaming_path", FoamingWorkbook)
 
         book.add_order(
             wo_number          = wo.work_order_no,
@@ -98,7 +97,7 @@ class SheetBuilder:
     def add_to_carpenter(self, wo: WorkOrder) -> None:
         month_key = wo.workbook_month   # e.g. "Jul 26" — based on modified_delivery, same as wo_number
 
-        book = self._book_for(self._carpenter_books, month_key, self._carpenter_path, CarpenterWorkbook)
+        book = self._book_for(self._carpenter_books, month_key, "carpenter_path", CarpenterWorkbook)
 
         book.add_order(
             wo_number          = wo.work_order_no,
@@ -114,7 +113,7 @@ class SheetBuilder:
     def add_to_sales(self, wo: WorkOrder) -> None:
         month_key = wo.workbook_month   # e.g. "Jul 26" — based on modified_delivery, same as wo_number
 
-        book = self._book_for(self._sales_books, month_key, self._sales_path, SalesWorkbook)
+        book = self._book_for(self._sales_books, month_key, "sales_path", SalesWorkbook)
 
         book.add_order(
             wo_number           = wo.work_order_no,

@@ -18,19 +18,20 @@ logger = logging.getLogger(__name__)
 class WorkbookManager:
     """
     Base class for managing a monthly Excel workbook.
-    Loads an existing workbook uploaded by the user and appends new sheets to it.
-    A new, blank workbook is created instead whenever start_blank=True — used
-    by SheetBuilder for every month after the first one it encounters, so
-    that a run spanning two months doesn't dump the second month's orders
-    into a copy of the first month's file. See SheetBuilder._book_for.
+    Loads an existing workbook uploaded by the user and appends new sheets
+    to it. If existing_path is None, starts from a blank workbook instead
+    — used by SheetBuilder for any month whose MonthPlan has no uploaded
+    file, so that a run spanning two months doesn't dump the second
+    month's orders into a copy of the first month's file.
 
     template_bytes  — raw .xlsx bytes from TemplateLoader.raw_bytes
     template_sheet  — which sheet name inside the template to copy from
-    existing_path   — path to the user-uploaded active workbook; still used
-                       as the output directory even when start_blank=True
+    existing_path   — path to an uploaded workbook to continue from, or
+                       None to start blank
     month_key       — e.g. "Jul/26", used for the output filename
-    start_blank     — skip loading existing_path's sheets, start from an
-                       empty workbook instead
+    fallback_dir    — output directory to use when existing_path is None,
+                       since there's no uploaded file to infer one from
+                       (see save())
     """
 
     # Excel's default column width/row height when no explicit dimension is set,
@@ -45,19 +46,22 @@ class WorkbookManager:
     _PAPER_SIZE_A4     = 9
     _PAGE_ORIENTATION  = "landscape"   # overridden by Foaming (portrait)
 
-    def __init__(self, existing_path: str, template_bytes: bytes,
-                 template_sheet: str, month_key: str, start_blank: bool = False):
+    def __init__(self, existing_path: str | None, template_bytes: bytes,
+                 template_sheet: str, month_key: str, fallback_dir: str):
         self._source_path     = existing_path
+        self._fallback_dir    = fallback_dir
         self._template_bytes  = template_bytes
         self._template_sheet  = template_sheet
         self._month_key       = month_key
-        self._wb              = self._new_blank_workbook() if start_blank else load_workbook(existing_path)
+        self._wb              = load_workbook(existing_path) if existing_path else self._new_blank_workbook()
 
     @staticmethod
     def _new_blank_workbook() -> Workbook:
         """
         A workbook with no sheets, used instead of existing_path's own
-        sheets whenever start_blank=True
+        sheets whenever existing_path is None — add_order's _copy_template
+        creates every sheet it needs from the template, so nothing here
+        needs to be pre-populated.
         """
         wb = Workbook()
         wb.remove(wb.active)
@@ -209,11 +213,15 @@ class WorkbookManager:
 
     def save(self) -> str:
         """
-        Save the workbook to the same directory as the uploaded workbook.
-        Returns the full path written.
+        Save the workbook next to the uploaded workbook it continued from,
+        or into fallback_dir if it was started blank (no uploaded file to
+        infer a directory from). Returns the full path written.
         """
-        directory = "/".join(self._source_path.replace("\\", "/").split("/")[:-1])
-        path      = f"{directory}/{self._filename()}"
+        if self._source_path:
+            directory = "/".join(self._source_path.replace("\\", "/").split("/")[:-1])
+        else:
+            directory = self._fallback_dir
+        path = f"{directory}/{self._filename()}"
         self._wb.save(path)
         return path
 
@@ -368,9 +376,8 @@ class FoamingWorkbook(WorkbookManager):
 
     _PAGE_ORIENTATION = "portrait"
 
-    def __init__(self, existing_path: str, template_bytes: bytes, month_key: str,
-                 start_blank: bool = False):
-        super().__init__(existing_path, template_bytes, SHEET_FOAMING, month_key, start_blank)
+    def __init__(self, existing_path: str | None, template_bytes: bytes, month_key: str, fallback_dir: str):
+        super().__init__(existing_path, template_bytes, SHEET_FOAMING, month_key, fallback_dir)
 
     @staticmethod
     def last_order_number(existing_path: str) -> int | None:
@@ -437,9 +444,8 @@ class CarpenterWorkbook(WorkbookManager):
 
     _DATA_START_ROW = 4
 
-    def __init__(self, existing_path: str, template_bytes: bytes, month_key: str,
-                 start_blank: bool = False):
-        super().__init__(existing_path, template_bytes, SHEET_CARPENTER, month_key, start_blank)
+    def __init__(self, existing_path: str | None, template_bytes: bytes, month_key: str, fallback_dir: str):
+        super().__init__(existing_path, template_bytes, SHEET_CARPENTER, month_key, fallback_dir)
         self._new_sheet_names: set[str] = set()   # sheets created THIS session
 
     def add_order(self, wo_number: str, modified_delivery: date, sku_id: str,
@@ -499,9 +505,8 @@ class SalesWorkbook(WorkbookManager):
     _DATA_START_ROW = 4
     _DATE_PLACEHOLDER = "[Order Confirmed Date]"
 
-    def __init__(self, existing_path: str, template_bytes: bytes, month_key: str,
-                 start_blank: bool = False):
-        super().__init__(existing_path, template_bytes, SHEET_SALES, month_key, start_blank)
+    def __init__(self, existing_path: str | None, template_bytes: bytes, month_key: str, fallback_dir: str):
+        super().__init__(existing_path, template_bytes, SHEET_SALES, month_key, fallback_dir)
 
     def add_order(self, wo_number: str, modified_delivery: date,
                   customer_name: str, product_name: str, order_id: str,

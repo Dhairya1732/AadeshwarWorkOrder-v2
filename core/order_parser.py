@@ -1,6 +1,8 @@
 import pandas as pd
 from datetime import date, timedelta
+from typing import Callable
 
+from models.month_plan import MonthPlan
 from models.pending_order import PendingOrder
 from models.work_order import WorkOrder
 
@@ -22,20 +24,24 @@ _DATETIME_FORMAT   = "%d-%m-%y %H:%M"
 
 class OrderParser:
     """
-    Reads a Pepperfry pending orders CSV and produces a list of WorkOrder objects.
-    Handles parsing, type conversion, and modified delivery date computation.
+    Reads a Pepperfry pending orders CSV and produces a list of WorkOrder
+    objects, plus the MonthPlan used for each distinct workbook_month found.
     work_order_no and stripped_name are left blank — filled before SheetBuilder runs.
 
-    start_number only applies to the month matching reference_date's calendar
-    month
+    The first workbook_month encountered uses month1_plan as-is — the
+    primary Foaming/Carpenter/Sales files already selected in the main
+    window. Every subsequent, previously-unseen workbook_month calls
+    on_new_month(month_key) to get its own MonthPlan. This is the hook
+    MainWindow uses to pause and prompt the user
     """
 
-    def parse(self, csv_path: str, start_number: int, reference_date: date | None = None) -> list[WorkOrder]:
+    def parse(self, csv_path: str, month1_plan: MonthPlan,
+              on_new_month: Callable[[str], MonthPlan]) -> tuple[list[WorkOrder], dict[str, MonthPlan]]:
         """
-        Read the CSV at csv_path and return one WorkOrder per row.
-        work_order_no is assigned sequentially from start_number within the
-        active month (see class docstring); reference_date defaults to today
-        and is settable for tests.
+        Read the CSV at csv_path and return (work_orders, month_plans).
+        work_order_no is assigned sequentially per month, starting from
+        that month's MonthPlan.start_number (see class docstring for how
+        each month's plan is obtained).
         Raises ValueError if required columns are missing.
         Raises FileNotFoundError if the path does not exist.
         """
@@ -47,29 +53,41 @@ class OrderParser:
             ignore_index=True,
         )
 
-        active_month = (reference_date or date.today()).strftime("%b/%y")
+        parsed_rows = [
+            (
+                row,
+                self._parse_date(row[_COL_SHIP_BEFORE], _DATE_FORMAT),
+                self._parse_date(row[_COL_ORDER_DATE], _DATETIME_FORMAT),
+                self._parse_date(row[_COL_SHIP_BEFORE], _DATE_FORMAT) - _DELIVERY_OFFSET,
+            )
+            for _, row in df.iterrows()
+        ]
+
+        # Decide every distinct workbook_month's MonthPlan up front, in
+        # chronological order of modified_delivery.
+        earliest_delivery: dict[str, date] = {}
+        for _, _, _, modified in parsed_rows:
+            month_key = modified.strftime("%b %y")
+            if month_key not in earliest_delivery or modified < earliest_delivery[month_key]:
+                earliest_delivery[month_key] = modified
+
+        month_plans: dict[str, MonthPlan] = {}
+        for i, month_key in enumerate(sorted(earliest_delivery, key=earliest_delivery.get)):
+            month_plans[month_key] = month1_plan if i == 0 else on_new_month(month_key)
+
+        # Running order-number counter per month_key, seeded from each plan
+        month_counters = {mk: plan.start_number for mk, plan in month_plans.items()}
 
         work_orders = []
-        # Track per-month counters for work order numbering
-        month_counters: dict[str, int] = {}
 
-        for _, row in df.iterrows():
-            ship_before     = self._parse_date(row[_COL_SHIP_BEFORE], _DATE_FORMAT)
-            order_confirmed = self._parse_date(row[_COL_ORDER_DATE], _DATETIME_FORMAT)
-            modified        = ship_before - _DELIVERY_OFFSET
+        for row, ship_before, order_confirmed, modified in parsed_rows:
+            # month_key matches WorkOrder.workbook_month exactly, so
+            # SheetBuilder can look a plan up by the same key it already uses.
+            month_key  = modified.strftime("%b %y")   # e.g. "Jul 26"
+            month_abbr = modified.strftime("%b")        # e.g. "Jul" — used in wo_number
 
-            # Internal counter key — includes year so e.g. Jul/26 and Jul/27
-            # don't share a counter. Not used for display.
-            counter_key = modified.strftime("%b/%y")    # e.g. "Jul/26"
-            month_abbr  = modified.strftime("%b")        # e.g. "Jul" — used in wo_number
-
-            # Assign work order number — resets per month.
-            if counter_key not in month_counters:
-                month_counters[counter_key] = start_number if counter_key == active_month else 1
-            else:
-                month_counters[counter_key] += 1
-
-            wo_number = f"G1/{month_abbr}/{month_counters[counter_key]}"
+            wo_number = f"G1/{month_abbr}/{month_counters[month_key]}"
+            month_counters[month_key] += 1
 
             source = PendingOrder(
                 order_id        = str(row[_COL_ORDER_ID]).strip(),
@@ -90,7 +108,7 @@ class OrderParser:
                 source            = source,
             ))
 
-        return work_orders
+        return work_orders, month_plans
 
     # ── Helpers ─────────────────────────────────────────────────────────────────
 
