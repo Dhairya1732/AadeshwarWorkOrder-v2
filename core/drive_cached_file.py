@@ -1,7 +1,10 @@
-import os
 import requests
 from pathlib import Path
 
+from core.config import get_google_drive_api_key
+
+# On-disk cache directory shared by every DriveCachedFile subclass, so each
+# one just needs its own file "stem" (see _CACHE_NAME).
 _CACHE_DIR = Path.home() / ".work_order_generator"
 
 
@@ -25,7 +28,7 @@ class DriveCachedFile:
     (e.g. validate contents, parse into a lookup table).
     """
 
-    _API_KEY = os.environ.get("GOOGLE_DRIVE_API_KEY", "")
+    _API_KEY = get_google_drive_api_key()
 
     _FILE_ID: str
     _CHANGE_FIELD: str = "md5Checksum"
@@ -36,8 +39,19 @@ class DriveCachedFile:
         self._checked_this_session = False
 
     def fetch(self) -> None:
+        """
+        Check for remote changes exactly once per instance. On that first
+        call: fetch the remote change token (md5Checksum or modifiedTime)
+        and compare it against the value saved with the disk cache — only
+        download the full file if they differ. Every later call is a
+        no-op and just keeps using what's already in memory.
+
+        Raises ConnectionError if the (first-call) metadata/download
+        request fails and there's no usable cache to fall back on.
+        """
         if self._checked_this_session:
             return
+
         self._bytes = self._load_current_bytes()
         self._checked_this_session = True
         self._on_loaded()
@@ -48,14 +62,21 @@ class DriveCachedFile:
             raise RuntimeError(f"{type(self).__name__} not loaded — call fetch() first.")
         return self._bytes
 
-    # ── Hooks for subclasses ──────────────────────────────────────────────
+    # ── Hooks for subclasses ────────────────────────────────────────────────────
+
     def _download(self) -> bytes:
-        return self._get(params={"alt": "media", "key": self._API_KEY}, purpose="download").content
+        """Fetch the file's raw content. Override for Drive-native docs, which need /export instead."""
+        return self._get(
+            params={"alt": "media", "key": self._API_KEY},
+            purpose="download",
+        ).content
 
     def _on_loaded(self) -> None:
+        """Optional post-load hook (e.g. validating sheets, parsing a lookup table). No-op by default."""
         pass
 
-    # ── Shared plumbing ───────────────────────────────────────────────────
+    # ── Shared plumbing ─────────────────────────────────────────────────────────
+
     @property
     def _drive_file_url(self) -> str:
         return f"https://www.googleapis.com/drive/v3/files/{self._FILE_ID}"
@@ -69,12 +90,13 @@ class DriveCachedFile:
         return _CACHE_DIR / f"{self._CACHE_NAME}.meta"
 
     def _load_current_bytes(self) -> bytes:
+        """Cached bytes if the remote change token still matches; otherwise a fresh download."""
         try:
             remote_token = self._fetch_remote_change_token()
         except requests.exceptions.RequestException as e:
             cached = self._read_cache()
             if cached is not None:
-                return cached
+                return cached  # offline / API hiccup — fall back to last-known-good copy
             raise ConnectionError(f"Failed to check '{self._CACHE_NAME}' for changes on Drive:\n{e}")
 
         cached_bytes = self._read_cache()
@@ -115,6 +137,7 @@ class DriveCachedFile:
             )
 
     def _read_cache(self) -> bytes | None:
+        """None if there's no cache yet (e.g. very first run on this machine)."""
         try:
             return self._cache_file.read_bytes()
         except FileNotFoundError:

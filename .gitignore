@@ -1,5 +1,10 @@
 # API key
 .env
+config.env
+
+# PyInstaller build output (regenerable — rebuild with the tracked .spec file)
+build/
+dist/
 
 # Python bytecode
 __pycache__/
