@@ -1,4 +1,5 @@
 import pandas as pd
+from dateutil import parser as dateutil_parser
 from datetime import date, timedelta
 from typing import Callable
 
@@ -19,8 +20,6 @@ _COL_ORDER_DATE        = "Order Confirmed Date"
 _COL_IMAGE_URL         = "Image url"
 
 _DELIVERY_OFFSET       = timedelta(days=2)
-_DATE_FORMAT           = "%d-%m-%y"
-_DATETIME_FORMAT       = "%d-%m-%y %H:%M"
 
 
 class OrderParser:
@@ -48,21 +47,15 @@ class OrderParser:
         """
         df = pd.read_csv(csv_path)
         self._validate_columns(df)
-        df = df.sort_values(
-            by=_COL_ORDER_DATE,
-            key=lambda col: pd.to_datetime(col, format=_DATETIME_FORMAT),
-            ignore_index=True,
-        )
 
-        parsed_rows = [
+        parsed_rows = sorted(
             (
-                row,
-                self._parse_date(row[_COL_SHIP_BEFORE], _DATE_FORMAT),
-                self._parse_date(row[_COL_ORDER_DATE], _DATETIME_FORMAT),
-                self._parse_date(row[_COL_SHIP_BEFORE], _DATE_FORMAT) - _DELIVERY_OFFSET,
-            )
-            for _, row in df.iterrows()
-        ]
+                (row, self._parse_date(row[_COL_SHIP_BEFORE]), self._parse_date(row[_COL_ORDER_DATE]),
+                 self._parse_date(row[_COL_SHIP_BEFORE]) - _DELIVERY_OFFSET)
+                for _, row in df.iterrows()
+            ),
+            key=lambda r: r[2],   # order_confirmed
+        )
 
         # Decide every distinct workbook_month's MonthPlan up front, in
         # chronological order of modified_delivery.
@@ -117,7 +110,7 @@ class OrderParser:
     def _validate_columns(self, df: pd.DataFrame):
         required = {
             _COL_ORDER_ID, _COL_QTY, _COL_PRODUCT_NAME,
-            _COL_AADESHWAR_SKU_ID, _COL_CUSTOMER_NAME,
+            _COL_PEPPERFRY_SKU_ID, _COL_AADESHWAR_SKU_ID, _COL_CUSTOMER_NAME,
             _COL_SHIP_BEFORE, _COL_ORDER_DATE, _COL_IMAGE_URL,
         }
         missing = required - set(df.columns)
@@ -127,15 +120,12 @@ class OrderParser:
                 f"Make sure you are uploading a Pepperfry pending orders export."
             )
 
-    def _parse_date(self, value: str, fmt: str) -> date:
+    def _parse_date(self, value: str) -> date:
         """
-        Parse a date string into a Python date object, using the explicit
-        fmt for the column being read (see _DATE_FORMAT / _DATETIME_FORMAT
-        above). Passing fmt explicitly avoids pandas' format-guessing, which 
-        is slower and would otherwise default to month-first parsing, silently 
-        misparsing dates like "09-07-26" as 7 September instead of 9 July.
+        Parse a date string into a Python date object, regardless of its
+        exact format
         """
-        return pd.to_datetime(value, format=fmt).date()
+        return dateutil_parser.parse(str(value), dayfirst=True).date()
 
     @staticmethod
     def format_date(d: date) -> str:
