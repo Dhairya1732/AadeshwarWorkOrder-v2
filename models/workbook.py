@@ -395,7 +395,8 @@ class FoamingWorkbook(WorkbookManager):
             return None
 
     def add_order(self, wo_number: str, order_date: date, modified_delivery: date,
-                  customer_name: str, order_id: str, product_name: str, qty: int, image_url: str = "") -> None:
+                  customer_name: str, order_id: str, product_name: str, qty: int,
+                  image_url: str = "", fabric: str = "") -> None:
         sheet_name = wo_number.split("/")[-1]   # "G1/Jul/47" → "47"
 
         if self.has_sheet(sheet_name):
@@ -403,7 +404,7 @@ class FoamingWorkbook(WorkbookManager):
 
         ws = self._copy_template(sheet_name)
         self._fill(ws, wo_number, order_date, modified_delivery,
-                   customer_name, order_id, product_name, qty)
+                   customer_name, order_id, product_name, qty, fabric)
         
         if image_url:
             self._embed_scaled_image(
@@ -414,7 +415,7 @@ class FoamingWorkbook(WorkbookManager):
 
     def _fill(self, ws: Worksheet, wo_number: str, order_date: date,
               modified_delivery: date, customer_name: str,
-              order_id: str, product_name: str, qty: int) -> None:
+              order_id: str, product_name: str, qty: int, fabric: str) -> None:
         fmt = OrderParser.format_date
 
         ws["B4"]  = wo_number
@@ -423,6 +424,7 @@ class FoamingWorkbook(WorkbookManager):
         ws["B8"]  = customer_name
         ws["C10"] = order_id
         ws["B13"] = product_name
+        ws["B14"] = fabric
         ws["E15"] = qty
 
     def _filename(self) -> str:
@@ -449,7 +451,7 @@ class CarpenterWorkbook(WorkbookManager):
         self._new_sheet_names: set[str] = set()   # sheets created THIS session
 
     def add_order(self, wo_number: str, modified_delivery: date, sku_id: str,
-                  order_id: str, qty: int, order_date: date) -> None:
+                  order_id: str, qty: int, order_date: date, fabric: str = "") -> None:
         sheet_name = self.date_to_sheet_name(order_date)
 
         if not self.has_sheet(sheet_name):
@@ -465,7 +467,8 @@ class CarpenterWorkbook(WorkbookManager):
         ws.cell(row=next_row, column=2).value = wo_number
         ws.cell(row=next_row, column=3).value = modified_delivery.strftime("%d/%m/%Y")
         ws.cell(row=next_row, column=4).value = sku_id
-        # columns 5 (Fabric), 6 (Remark), 7 (Inches), 8 (Total Inches) — manual
+        ws.cell(row=next_row, column=5).value = fabric
+        # columns 6 (Remark), 7 (Inches), 8 (Total Inches) — manual
         ws.cell(row=next_row, column=9).value = order_id
 
     def save(self) -> str:
@@ -509,8 +512,8 @@ class SalesWorkbook(WorkbookManager):
         super().__init__(existing_path, template_bytes, SHEET_SALES, month_key, fallback_dir)
 
     def add_order(self, wo_number: str, modified_delivery: date,
-                  customer_name: str, product_name: str, order_id: str,
-                  qty: int, order_date: date) -> None:
+                  customer_name: str, sku_id: str, order_id: str,
+                  qty: int, order_date: date, fabric: str = "") -> None:
         sheet_name = self.date_to_sheet_name(order_date)
 
         if not self.has_sheet(sheet_name):
@@ -526,8 +529,9 @@ class SalesWorkbook(WorkbookManager):
         ws.cell(row=next_row, column=3).value = wo_number
         ws.cell(row=next_row, column=4).value = qty
         ws.cell(row=next_row, column=5).value = customer_name
-        ws.cell(row=next_row, column=6).value = product_name
-        # columns 7 (Fabric), 8 (Remark) — manual
+        ws.cell(row=next_row, column=6).value = sku_id
+        ws.cell(row=next_row, column=7).value = fabric
+        # column 8 (Remark) — manual
         ws.cell(row=next_row, column=9).value = order_id
         # columns 10 (Dispatch Date), 11 (Foaming Team), 12 (Carpenter Team) — manual
 

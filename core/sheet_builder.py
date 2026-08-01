@@ -82,12 +82,13 @@ class SheetBuilder:
         book = self._book_for(self._foaming_books, month_key, "foaming_path", FoamingWorkbook)
 
         book.add_order(
-            wo_number          = wo.work_order_no,
+            wo_number           = wo.work_order_no,
             order_date          = wo.order_date,
             modified_delivery   = wo.modified_delivery,
             customer_name       = wo.customer_name,
             order_id            = wo.order_id,
-            product_name        = wo.product_name,    # full name, not stripped
+            product_name        = wo.custom_sku or wo.product_name,   # custom SKU; full pepperfry name is only the fallback
+            fabric              = wo.fabric,
             qty                 = wo.qty,
             image_url           = wo.source.image_url,
         )
@@ -102,7 +103,8 @@ class SheetBuilder:
         book.add_order(
             wo_number          = wo.work_order_no,
             modified_delivery  = wo.modified_delivery,
-            sku_id             = wo.stripped_name,   # carpenter uses stripped name, not SKU
+            sku_id             = wo.stripped_name,   # custom SKU from the database, or stripped name as fallback
+            fabric             = wo.fabric,
             order_id           = wo.order_id,
             qty                = wo.qty,
             order_date         = wo.order_date,   # per-day SHEET name within the workbook — unaffected by month_key above
@@ -119,7 +121,8 @@ class SheetBuilder:
             wo_number           = wo.work_order_no,
             modified_delivery   = wo.modified_delivery,
             customer_name       = wo.customer_name,
-            product_name        = wo.stripped_name,   # sales uses stripped name too
+            sku_id              = wo.stripped_name,   # custom SKU from the database, or stripped name as fallback
+            fabric              = wo.fabric,
             order_id            = wo.order_id,
             qty                 = wo.qty,
             order_date          = wo.order_date,   # per-day SHEET name within the workbook — unaffected by month_key above

@@ -20,8 +20,8 @@ class WorkOrder:
     """
     A processed order derived from a PendingOrder.
     Contains all derived fields needed to populate the three sheet types.
-    fabric_code and customization start empty — filled manually by the user
-    after sheets are generated.
+    customization starts empty — filled manually by the user after sheets
+    are generated.
     """
     # Generated
     work_order_no:     str
@@ -33,6 +33,10 @@ class WorkOrder:
 
     # Reference back to the raw order
     source:            PendingOrder = field(repr=False)
+
+    # Optional / derived after the fact
+    fabric:            str = ""
+    custom_sku:        str = ""   # from the database sheet only — "" if no match, no fallback baked in
 
     # ── Convenience properties ──────────────────────────────────────────────────
 
@@ -46,12 +50,12 @@ class WorkOrder:
 
     @property
     def product_name(self) -> str:
-        """Full Pepperfry product name — used in foaming sheet."""
+        """Full Pepperfry product name — foaming sheet's fallback when custom_sku is blank."""
         return self.source.product_name
 
     @property
-    def your_sku_id(self) -> str:
-        return self.source.your_sku_id
+    def aadeshwar_sku_id(self) -> str:
+        return self.source.aadeshwar_sku_id
 
     @property
     def qty(self) -> int:

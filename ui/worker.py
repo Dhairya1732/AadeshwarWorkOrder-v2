@@ -4,6 +4,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from core.order_parser import OrderParser
 from core.template_loader import TemplateLoader
+from core.sku_database import SkuDatabase
 from core.sheet_builder import SheetBuilder
 from core.validation import validate_start_number
 from models.month_plan import MonthPlan
@@ -30,6 +31,7 @@ class GenerateWorker(QThread):
     new_month_needed     = pyqtSignal(str, object)   # (month_key, threading.Event to set() once answered)
 
     _template_loader = TemplateLoader()
+    _sku_database    = SkuDatabase()
 
     def __init__(self, csv_path: str, foaming_path: str,
                  carpenter_path: str, sales_path: str, start_number: int):
@@ -73,9 +75,17 @@ class GenerateWorker(QThread):
             parser = OrderParser()
             work_orders, month_plans = parser.parse(self._csv_path, month1_plan, self._prompt_new_month)
 
-            # ── Step 2: Strip colour from product names ──
+            # ── Step 2: Look up each order's custom SKU + fabric from the
+            # database sheet, keyed by Pepperfry's "Your SKU ID". Falls back
+            # to the old colour-stripped product name when a SKU has no
+            # match in the sheet, or its Stripped Product Name cell is blank;
+            # fabric simply stays blank in that case, for manual fill-in. ──
+            self._sku_database.fetch()
             for wo in work_orders:
-                wo.stripped_name = WorkOrder.strip_colour(wo.source.product_name)
+                custom_sku, fabric = self._sku_database.get(wo.source.pepperfry_sku_id)
+                wo.custom_sku    = custom_sku or ""
+                wo.stripped_name = custom_sku or WorkOrder.strip_colour(wo.source.product_name)
+                wo.fabric        = fabric or ""
 
             # ── Step 3: Check for template changes ──
             self._template_loader.fetch()
