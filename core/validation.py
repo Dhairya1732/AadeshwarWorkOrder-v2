@@ -6,10 +6,6 @@ def validate_start_number(foaming_path: str | None, start_number: int) -> None:
     Raise ValueError if start_number would collide with an order already
     present in foaming_path's workbook. No-op if foaming_path is None —
     a blank workbook has nothing to collide with.
-
-    Shared by GenerateWorker (checked once up front, for the primary
-    uploaded workbook) and NewMonthDialog (checked interactively, for
-    whichever workbook the user optionally uploads for a later month).
     """
     if foaming_path is None:
         return
